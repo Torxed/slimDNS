@@ -20,7 +20,8 @@ except:
 	import imp, importlib.machinery
 	namespace = 'config'
 	loader = importlib.machinery.SourceFileLoader(namespace, '/etc/slimDNS/config.py')
-	config = loader.load_module(namespace)
+	handle = loader.load_module(namespace)
+	config = handle.config
 	# imp.reload(config) # - Doesn't work after Python 3.4:
 	#
 	# Traceback (most recent call last):
