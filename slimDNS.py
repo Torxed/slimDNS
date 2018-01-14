@@ -160,7 +160,7 @@ class Record:
 		#return self.record_type == QTYPE.SOA and q.qname.matchSuffix(self.name)
 
 	def __str__(self):
-        return str(self.rr)
+		return str(self.rr)
 
 class Resolver(ProxyResolver):
 	def __init__(self):
