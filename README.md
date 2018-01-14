@@ -7,7 +7,7 @@ Create a user/role called "slimdns"
 
     [postgres@machine~] createuser --interactive
     [postgres@machine~] psql
-    > CREATE DATABASE slimdns OWNER slimdns
+    > CREATE DATABASE slimdns OWNER slimdns;
     > ALTER USER slimdns WITH PASSWORD '<some secure random string>';
 
 # Running:
