@@ -21,6 +21,7 @@ EPOCH = datetime(1970, 1, 1)
 SERIAL = int((datetime.utcnow() - EPOCH).total_seconds())
 
 TYPE_LOOKUP = {
+	## text rep -> class/id
 	'A': (dns.A, QTYPE.A),
 	'AAAA': (dns.AAAA, QTYPE.AAAA),
 	'CAA': (dns.CAA, QTYPE.CAA),
@@ -35,6 +36,22 @@ TYPE_LOOKUP = {
 	'SRV': (dns.SRV, QTYPE.SRV),
 	'TXT': (dns.TXT, QTYPE.TXT),
 	'SPF': (dns.TXT, QTYPE.TXT),
+
+	## From id -> text rep
+	QTYPE.A : 'A',
+	QTYPE.AAAA : 'AAAA',
+	QTYPE.CAA : 'CAA',
+	QTYPE.CNAME : 'CNAME',
+	QTYPE.DNSKEY : 'DNSKEY',
+	QTYPE.MX : 'MX',
+	QTYPE.NAPTR : 'NAPTR',
+	QTYPE.NS : 'NS',
+	QTYPE.PTR : 'PTR',
+	QTYPE.RRSIG : 'RRSIG',
+	QTYPE.SOA : 'SOA',
+	QTYPE.SRV : 'SRV',
+	QTYPE.TXT : 'TXT',
+	QTYPE.TXT : 'SPF',
 }
 
 def generate_UID():
@@ -128,8 +145,9 @@ class Record:
 		self.name = DNSLabel(name)
 		self.raw_qtype = record_type
 		if not content: content = name
+		content_list = None
 
-		rd_cls, self.record_type = TYPE_LOOKUP[record_type]
+		record_class, self.record_type = TYPE_LOOKUP[record_type]
 
 		if self.record_type == QTYPE.SOA and len(args) == 2:
 			# add sensible times to SOA
@@ -145,19 +163,30 @@ class Record:
 			else:
 				ttl = 60
 
-		self.rr = RR(
-			rname=self.name,
-			rtype=self.record_type,
-			rdata=rd_cls(content),
-			ttl=ttl,
-		)
+		if content.count(' '):
+			if record_type == 'MX':
+				content, preference = content.split(' ')
+				content = record_class(content, preference=int(preference))
+			else:
+				content = record_class(*content.split(' '))
+		else:
+			content = record_class(content)
+
+		self.rr = RR(rname=self.name, rtype=self.record_type, rdata=content, ttl=ttl,)
+
+		#self.rr = RR(
+		#	rname=self.name,
+		#	rtype=self.record_type,
+		#	rdata=record_class(content),
+		#	ttl=ttl,
+		#)
 
 	def match(self, q):
 		return q.qname == self.name and (q.qtype == QTYPE.ANY or q.qtype == self.record_type)
 
 	def sub_match(self, q):
-		pass # For now, not sure what the implications of this is yet.
-		#return self.record_type == QTYPE.SOA and q.qname.matchSuffix(self.name)
+		# return self.record_type in (QTYPE.SOA, QTYPE.MX) and q.qtype in (QTYPE.SOA, QTYPE.MX) and q.qname.matchSuffix(self.name)
+		return self.record_type in (QTYPE.SOA, QTYPE.MX) and q.qtype == self.record_type and self.name.matchSuffix(q.qname)
 
 	def __str__(self):
 		return str(self.rr)
@@ -181,13 +210,13 @@ class Resolver(ProxyResolver):
 						records.append(Record(record_type=record['type'], domain=domain_row['name'], name=record['name'], content=record['content'], ttl=record['ttl']))
 				self.zones[DNSLabel(domain_row['name'])] = records
 
-	def traverse_records(self, zone, request, reply, traverse=False):
+	def traverse_records(self, zone, request, reply, recursive=False):
 		if not zone: return reply
 
 		for record in zone:
 			if record.match(request.q):
 				reply.add_answer(record.rr)
-			elif traverse and record.sub_match(request.q):
+			elif recursive and request.q.qtype in TYPE_LOOKUP and TYPE_LOOKUP[request.q.qtype] in config['recursive'] and record.sub_match(request.q):
 				reply.add_answer(record.rr)
 
 	def resolve(self, request, handler):
@@ -206,7 +235,7 @@ class Resolver(ProxyResolver):
 			if not reply.rr:
 				# Still no results,
 				# look for a SOA record for a higher level zone
-				self.traverse_records(self.zones.get(request.q.qname), request, reply, traverse=True)
+				self.traverse_records(self.zones.get(request.q.qname), request, reply, recursive=True)
 
 		if config['forwarder'] and not reply.rr:
 			return super().resolve(request, handler)
