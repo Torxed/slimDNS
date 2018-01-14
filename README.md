@@ -1,5 +1,5 @@
 # slimDNS
-A simple DNS server
+A simple DNS server (that requires [python-dnslib](https://github.com/andreif/dnslib) unfortunately)
 
 # Setup:
 
