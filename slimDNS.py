@@ -13,9 +13,18 @@ from dnslib import A, AAAA, CNAME, MX, NS, SOA, TXT
 from dnslib.proxy import ProxyResolver
 from dnslib.server import DNSServer
 
-from config import config
+try:
+	# Grab the local copy first
+	from config import config
+except:
+	import imp, importlib.machinery
+	namespace = 'config'
+	loader = importlib.machinery.SourceFileLoader(namespace, '/etc/slimDNS/config.py')
+	config = loader.load_module(namespace)
+	imp.reload(config)
 
 ## https://github.com/samuelcolvin/dnserver/blob/master/dnserver.py
+## https://github.com/paulchakravarti/dnslib/blob/master/dnslib/dns.py
 
 EPOCH = datetime(1970, 1, 1)
 SERIAL = int((datetime.utcnow() - EPOCH).total_seconds())
