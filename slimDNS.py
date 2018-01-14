@@ -13,6 +13,8 @@ from dnslib import A, AAAA, CNAME, MX, NS, SOA, TXT
 from dnslib.proxy import ProxyResolver
 from dnslib.server import DNSServer
 
+from config import config
+
 ## https://github.com/samuelcolvin/dnserver/blob/master/dnserver.py
 
 EPOCH = datetime(1970, 1, 1)
@@ -35,16 +37,6 @@ TYPE_LOOKUP = {
 	'SPF': (dns.TXT, QTYPE.TXT),
 }
 
-config = {
-	'soa' : {'refresh' : 60,
-			'retry' : 60,
-			'expire' : 60,
-			'minimum' : 60},
-	'forwarder' : None,
-	'log_level' : 2,
-	'log' : True
-}
-
 def generate_UID():
 	return sha256(pack('f', time()) + urandom(16)).hexdigest()
 
@@ -64,18 +56,18 @@ def log(*args, **kwargs):
 class postgres():
 	def __init__(self):
 		try:
-			self.con = psycopg2.connect("dbname=slimdns user=slimdns password='<OPTIONAL IF LOCALHOST>") # 
+			self.con = psycopg2.connect("dbname={}} user={} password='{}'".format(config['db']['name'], config['db']['user'], config['db']['password']))
 			self.cur = self.con.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 		except psycopg2.OperationalError:
-			con = psycopg2.connect("dbname=postgres user=slimdns")
+			con = psycopg2.connect("dbname=postgres user={} password='{}'".format(config['db']['user'], config['db']['password']))
 			con.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
 			cur = con.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-			cur.execute("CREATE DATABASE slimdns;")
+			cur.execute("CREATE DATABASE {};".format(config['db']['name']))
 			# con.commit() ## Redundant because we're in a isolated autocommit context.
 			cur.close()
 			con.close()
 
-			self.con = psycopg2.connect("dbname=slimdns user=slimdns")
+			self.con = psycopg2.connect("dbname={}} user={} password='{}'".format(config['db']['name'], config['db']['user'], config['db']['password']))
 			self.cur = self.con.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
 	def __enter__(self):
