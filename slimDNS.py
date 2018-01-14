@@ -40,6 +40,7 @@ config = {
 			'retry' : 60,
 			'expire' : 60,
 			'minimum' : 60},
+	'forwarder' : None,
 	'log_level' : 2,
 	'log' : True
 }
@@ -170,10 +171,9 @@ class Record:
         return str(self.rr)
 
 class Resolver(ProxyResolver):
-	def __init__(self, upstream=None):
-		self.upstream = upstream
-		if self.upstream:
-			super().__init__(upstream, 53, 5)
+	def __init__(self):
+		if config['forwarder']:
+			super().__init__(config['forwarder'], 53, 5)
 		self.zones = {}
 		self.last_cacheUpdate = time()
 		self.update_cache()
@@ -216,7 +216,7 @@ class Resolver(ProxyResolver):
 				# look for a SOA record for a higher level zone
 				self.traverse_records(self.zones.get(request.q.qname), request, reply, traverse=True)
 
-		if self.upstream and not reply.rr:
+		if config['forwarder'] and not reply.rr:
 			return super().resolve(request, handler)
 
 		return reply
