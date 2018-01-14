@@ -271,8 +271,8 @@ signal.signal(signal.SIGINT, signal_handler)
 
 resolver = Resolver()
 servers = [
-	DNSServer(resolver, port=5053, address='localhost', tcp=True),
-	DNSServer(resolver, port=5053, address='localhost', tcp=False),
+	DNSServer(resolver, port=53, address='localhost', tcp=True),
+	DNSServer(resolver, port=53, address='localhost', tcp=False),
 ]
 
 if __name__ == '__main__':
