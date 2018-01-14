@@ -7,7 +7,15 @@ from time import time
 from os import urandom
 from psycopg2.extras import RealDictRow
 
-from config import config
+try:
+	# Grab the local copy first
+	from config import config
+except:
+	import imp, importlib.machinery
+	namespace = 'config'
+	loader = importlib.machinery.SourceFileLoader(namespace, '/etc/slimDNS/config.py')
+	handle = loader.load_module(namespace)
+	config = handle.config
 
 def generate_UID():
 	return sha256(pack('f', time()) + urandom(16)).hexdigest()

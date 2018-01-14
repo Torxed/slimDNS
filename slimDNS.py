@@ -41,7 +41,7 @@ EPOCH = datetime(1970, 1, 1)
 SERIAL = int((datetime.utcnow() - EPOCH).total_seconds())
 
 TYPE_LOOKUP = {
-	## text rep -> class/id
+	## Text Representation (usually Postgres) -> class/id handles
 	'A': (dns.A, QTYPE.A),
 	'AAAA': (dns.AAAA, QTYPE.AAAA),
 	'CAA': (dns.CAA, QTYPE.CAA),
@@ -57,7 +57,7 @@ TYPE_LOOKUP = {
 	'TXT': (dns.TXT, QTYPE.TXT),
 	'SPF': (dns.TXT, QTYPE.TXT),
 
-	## From id -> text rep
+	## From dnslib-id -> text representation
 	QTYPE.A : 'A',
 	QTYPE.AAAA : 'AAAA',
 	QTYPE.CAA : 'CAA',
@@ -187,19 +187,17 @@ class Record:
 			if record_type == 'MX':
 				content, preference = content.split(' ')
 				content = record_class(content, preference=int(preference))
+			elif record_type == 'SRV':
+				content = content.split(' ')
+				content = record_class(*content)
+				# The values for the SRV class are:
+				# content, priority=0, weight=0, port=0, target=None
 			else:
 				content = record_class(*content.split(' '))
 		else:
 			content = record_class(content)
 
 		self.rr = RR(rname=self.name, rtype=self.record_type, rdata=content, ttl=ttl,)
-
-		#self.rr = RR(
-		#	rname=self.name,
-		#	rtype=self.record_type,
-		#	rdata=record_class(content),
-		#	ttl=ttl,
-		#)
 
 	def match(self, q):
 		return q.qname == self.name and (q.qtype == QTYPE.ANY or q.qtype == self.record_type)
@@ -257,6 +255,8 @@ class Resolver(ProxyResolver):
 				# look for a SOA record for a higher level zone
 				self.traverse_records(self.zones.get(request.q.qname), request, reply, recursive=True)
 
+		## TODO: Add a AUTHORATIVE SECTION if responses are empty?
+
 		if config['forwarder'] and not reply.rr:
 			return super().resolve(request, handler)
 
@@ -265,6 +265,7 @@ class Resolver(ProxyResolver):
 def signal_handler(signum, frame):
 	log('pid={}, got signal: {}, stopping...'.format(getpid(), signal.Signals(signum).name))
 	exit(0)
+
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
 
