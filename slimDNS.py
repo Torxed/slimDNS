@@ -56,7 +56,7 @@ def log(*args, **kwargs):
 class postgres():
 	def __init__(self):
 		try:
-			self.con = psycopg2.connect("dbname={}} user={} password='{}'".format(config['db']['name'], config['db']['user'], config['db']['password']))
+			self.con = psycopg2.connect("dbname={} user={} password='{}'".format(config['db']['name'], config['db']['user'], config['db']['password']))
 			self.cur = self.con.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 		except psycopg2.OperationalError:
 			con = psycopg2.connect("dbname=postgres user={} password='{}'".format(config['db']['user'], config['db']['password']))
@@ -67,7 +67,7 @@ class postgres():
 			cur.close()
 			con.close()
 
-			self.con = psycopg2.connect("dbname={}} user={} password='{}'".format(config['db']['name'], config['db']['user'], config['db']['password']))
+			self.con = psycopg2.connect("dbname={} user={} password='{}'".format(config['db']['name'], config['db']['user'], config['db']['password']))
 			self.cur = self.con.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
 	def __enter__(self):
