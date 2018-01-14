@@ -21,7 +21,17 @@ except:
 	namespace = 'config'
 	loader = importlib.machinery.SourceFileLoader(namespace, '/etc/slimDNS/config.py')
 	config = loader.load_module(namespace)
-	imp.reload(config)
+	# imp.reload(config) # - Doesn't work after Python 3.4:
+	#
+	# Traceback (most recent call last):
+	#   File "slimDNS.py", line 24, in <module>
+	#     imp.reload(config)
+	#   File "/usr/lib/python3.6/imp.py", line 315, in reload
+	#     return importlib.reload(module)
+	#   File "/usr/lib/python3.6/importlib/__init__.py", line 166, in reload
+	#     _bootstrap._exec(spec, module)
+	#   File "<frozen importlib._bootstrap>", line 600, in _exec
+	# AttributeError: 'NoneType' object has no attribute 'name'
 
 ## https://github.com/samuelcolvin/dnserver/blob/master/dnserver.py
 ## https://github.com/paulchakravarti/dnslib/blob/master/dnslib/dns.py
