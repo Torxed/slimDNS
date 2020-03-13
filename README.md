@@ -1,22 +1,25 @@
 # slimDNS
-A simple DNS server (that requires [python-dnslib](https://github.com/andreif/dnslib) unfortunately)
+
+A simple DNS server written in vanilla Python.
 
 # Setup:
 
-Create a user/role called "slimdns"
+a `records.json` in the working directory.<br>
+Basic syntax boils down to:<br>
 
-    [postgres@machine~] createuser --interactive
-    [postgres@machine~] psql
-    > CREATE DATABASE slimdns OWNER slimdns;
-    > ALTER USER slimdns WITH PASSWORD '<some secure random string>';
+```json
+{
+	"domain.com" : {
+		"A" : {"ip" : "127.0.0.1", "type" : "A", "class" : "IN", "ttl" : 60},
+		"SOA" : {}
+	}
+}
+```
 
-# Running:
+# Running
 
-    [postgres@machine~] python slimdns.py
+    $ sudo python slimDNS.py
 
-# Handy information
+# Note
 
- * Updates cache every 30 seconds.
- * Does support a forwarding DNS server
- * (Will try to create database slimdns if doesn't excist, but will then need permissions to create databases)
- * Might crash for no aparent reason :D
+Requires Linux, Python 3.3+ and has not been tested outside the lab.
