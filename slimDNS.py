@@ -1,289 +1,310 @@
-import json, signal
-import psycopg2, psycopg2.extras
-from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-from datetime import datetime
-from hashlib import sha256
-from struct import pack
-from time import time, sleep
-from os import urandom, getpid
-from psycopg2.extras import RealDictRow
+import json, sys, struct, abc, os, signal, ipaddress #Python v3.3
+from socket import *
+from select import epoll, EPOLLIN
+from collections import OrderedDict
 
-from dnslib import DNSLabel, QTYPE, RD, RR, dns
-from dnslib import A, AAAA, CNAME, MX, NS, SOA, TXT
-from dnslib.proxy import ProxyResolver
-from dnslib.server import DNSServer
+# https://tools.ietf.org/html/rfc1035
+# https://tools.ietf.org/html/rfc1034
+# https://www.freesoft.org/CIE/Topics/78.htm
+# https://www.freesoft.org/CIE/RFC/1035/39.htm
+# https://www.freesoft.org/CIE/RFC/1035/43.htm
+# https://www.freesoft.org/CIE/RFC/1035/42.htm
 
-try:
-	# Grab the local copy first
-	from config import config
-except:
-	import imp, importlib.machinery
-	namespace = 'config'
-	loader = importlib.machinery.SourceFileLoader(namespace, '/etc/slimDNS/config.py')
-	handle = loader.load_module(namespace)
-	config = handle.config
-	# imp.reload(config) # - Doesn't work after Python 3.4:
-	#
-	# Traceback (most recent call last):
-	#   File "slimDNS.py", line 24, in <module>
-	#     imp.reload(config)
-	#   File "/usr/lib/python3.6/imp.py", line 315, in reload
-	#     return importlib.reload(module)
-	#   File "/usr/lib/python3.6/importlib/__init__.py", line 166, in reload
-	#     _bootstrap._exec(spec, module)
-	#   File "<frozen importlib._bootstrap>", line 600, in _exec
-	# AttributeError: 'NoneType' object has no attribute 'name'
+def byte_to_bin(bs, bin_map=None):
+	"""
+	Has two functions:
 
-## https://github.com/samuelcolvin/dnserver/blob/master/dnserver.py
-## https://github.com/paulchakravarti/dnslib/blob/master/dnslib/dns.py
+	1) Converts a bytes() type string into a binary representation in str() format
 
-EPOCH = datetime(1970, 1, 1)
-SERIAL = int((datetime.utcnow() - EPOCH).total_seconds())
+	2) Boundles each binary representation in groups/blocks given by the bin_map list()
+	   [1, 1, 2] would group into [['00000000'], ['01010101'], ['10011010', '00110101']]
+	   - Any raiming data till be added in a list [...] at the end to not loose data.
 
-TYPE_LOOKUP = {
-	## Text Representation (usually Postgres) -> class/id handles
-	'A': (dns.A, QTYPE.A),
-	'AAAA': (dns.AAAA, QTYPE.AAAA),
-	'CAA': (dns.CAA, QTYPE.CAA),
-	'CNAME': (dns.CNAME, QTYPE.CNAME),
-	'DNSKEY': (dns.DNSKEY, QTYPE.DNSKEY),
-	'MX': (dns.MX, QTYPE.MX),
-	'NAPTR': (dns.NAPTR, QTYPE.NAPTR),
-	'NS': (dns.NS, QTYPE.NS),
-	'PTR': (dns.PTR, QTYPE.PTR),
-	'RRSIG': (dns.RRSIG, QTYPE.RRSIG),
-	'SOA': (dns.SOA, QTYPE.SOA),
-	'SRV': (dns.SRV, QTYPE.SRV),
-	'TXT': (dns.TXT, QTYPE.TXT),
-	'SPF': (dns.TXT, QTYPE.TXT),
+	TODO: handle bin_map = None
+	"""
+	raw = []
+	index = 0
+	for length in bin_map:
+		mipmap = []
+		for i in bs[index:index+length]:
+			mipmap.append('{0:b}'.format(i).zfill(8))
+		raw.append(mipmap)
+		index += length
+	if index < len(bs):
+		mipmap = []
+		for i in bs[index:]:
+			mipmap.append('{0:b}'.format(i).zfill(8))
+		raw.append(mipmap)
+	return raw
 
-	## From dnslib-id -> text representation
-	QTYPE.A : 'A',
-	QTYPE.AAAA : 'AAAA',
-	QTYPE.CAA : 'CAA',
-	QTYPE.CNAME : 'CNAME',
-	QTYPE.DNSKEY : 'DNSKEY',
-	QTYPE.MX : 'MX',
-	QTYPE.NAPTR : 'NAPTR',
-	QTYPE.NS : 'NS',
-	QTYPE.PTR : 'PTR',
-	QTYPE.RRSIG : 'RRSIG',
-	QTYPE.SOA : 'SOA',
-	QTYPE.SRV : 'SRV',
-	QTYPE.TXT : 'TXT',
-	QTYPE.TXT : 'SPF',
-}
+def bytes_to_hex(b):
+	s = ''
+	for i in b:
+		s += '{:02X}'.format(i) # Int -> HEX
+	return s
 
-def generate_UID():
-	return sha256(pack('f', time()) + urandom(16)).hexdigest()
+def bin_str_to_byte(s):
+	""" Converts a binary str() representation into a bytes() string """
+	b = b''
+	for index in range(len(s)):
+		b += bytes([int(s[index],2)])
+	return b
 
-def wash_dict(d):
-	clean = {}
-	for key, value in d.items():
-		if type(value) in (dict, RealDictRow):
-			value = wash_dict(value)
-		clean[key] = value
-	return clean
+def ip_to_bytes(ip_obj):
+	return struct.pack('>I', int(ip_obj))
 
-def log(*args, **kwargs):
-	if config['log']:
-		if not 'level' in kwargs or kwargs['level'] >= config['log_level']:
-			print('[LOG]',  ' '.join([str(x) for x in args]))
+class dns(abc.ABCMeta):
+	"""
 
-class postgres():
-	def __init__(self):
-		try:
-			self.con = psycopg2.connect("dbname={} user={} password='{}'".format(config['db']['name'], config['db']['user'], config['db']['password']))
-			self.cur = self.con.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-		except psycopg2.OperationalError:
-			con = psycopg2.connect("dbname=postgres user={} password='{}'".format(config['db']['user'], config['db']['password']))
-			con.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-			cur = con.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-			cur.execute("CREATE DATABASE {};".format(config['db']['name']))
-			# con.commit() ## Redundant because we're in a isolated autocommit context.
-			cur.close()
-			con.close()
+	Overview: https://www.freesoft.org/CIE/Topics/77.htm
+	Overview: https://www.freesoft.org/CIE/RFC/1035/39.htm
+	Header: https://www.freesoft.org/CIE/RFC/1035/40.htm
+	"""
 
-			self.con = psycopg2.connect("dbname={} user={} password='{}'".format(config['db']['name'], config['db']['user'], config['db']['password']))
-			self.cur = self.con.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+	@abc.abstractmethod
+	def record_type(t):
+		types = {
+			'a' : 1
+		}
+		if not t.lower() in types: return None
+		return types[t.lower()]
 
-	def __enter__(self):
-		self.cur.execute("CREATE TABLE IF NOT EXISTS domains (id BIGSERIAL PRIMARY KEY, \
-															  uid VARCHAR(255) NOT NULL, \
-															  name VARCHAR(255) NOT NULL, \
-															  subnets JSON NOT NULL DEFAULT '{}', \
-															  created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), \
-															  last_seen TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), \
-															  CONSTRAINT one_domainname UNIQUE (name));")
-		self.cur.execute("CREATE INDEX IF NOT EXISTS domain_name ON domains (name);")
+	@abc.abstractmethod
+	def record_class(c):
+		types = {
+			'in' : 1
+		}
+		if not c.lower() in types: return None
+		return types[c.lower()]
 
-		self.cur.execute("CREATE TABLE IF NOT EXISTS records (id BIGSERIAL PRIMARY KEY, \
-															  uid VARCHAR(255) NOT NULL, \
-															  domain BIGINT NOT NULL, \
-															  name VARCHAR(255) NOT NULL, \
-															  content VARCHAR(255) NOT NULL, \
-															  type VARCHAR(12) NOT NULL DEFAULT 'A', \
-															  ttl INT NOT NULL DEFAULT 60, \
-															  subnets JSON NOT NULL DEFAULT '{}', \
-															  created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), \
-															  last_seen TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), \
-															  CONSTRAINT one_team UNIQUE (domain, name, type, content));")
-		self.cur.execute("CREATE INDEX IF NOT EXISTS record_name ON records (name);")
+	@abc.abstractmethod
+	def human_query_type(i):
+		types = {
+			1 : 'A'
+		}
+		if not i in types: return None
+		return types[i]
 
-		self.con.commit()
-		return self
+	@abc.abstractmethod
+	def build_query_field(record):
+		response = b''
+		for block in record.split(b'.'):
+			response += struct.pack('B', len(block))
+			response += block
+		# record | type | class
+		print('Query field:', response + b'\x00\x01' + b'\x00\x01')
+		return response + b'\x00' + b'\x00\x01' + b'\x00\x01'
 
-	def __exit__(self, _type, value, traceback):
-		self.close()
+	@abc.abstractmethod
+	def build_answer_field(query_type, query, query_meta, cache):
+		if not query in cache: raise KeyError(f'DNS record {query} is not in cache: {cache}')
+		if not query_type in cache[query]: ValueError(f'DNS record {query} is missing a record for {query_type} requests')
 
-	def execute(self, q, commit=True):
-		log('SQLExecute: {q} [{commit}]'.format(q=q, commit=commit), level=1)
-		self.cur.execute(q)
-		if commit:
-			log('Commited!', level=1)
-			self.con.commit()
+		dns_header_length = 12
+		record_pointer_pos = dns_header_length + query_meta['position']
+		
+		## First we point to the position in the query of the name we're resolving.
+		## (to avoid appending unessecary data)
+		# Pointers:
+		#  https://www.freesoft.org/CIE/RFC/1035/43.htm
+		#  https://osqa-ask.wireshark.org/questions/50806/help-understanding-dns-packet-data
+		binary_pointer = '11' + bin(record_pointer_pos)[2:].zfill(14)
+		pointer = struct.pack('>H', int(binary_pointer, 2))
 
-			#log(list(self.query('SELECT * FROM access_tokens;')), level=1)
+		record_type = struct.pack('>H', dns.record_type(cache[query][query_type]['type']))
+		record_class = struct.pack('>H', dns.record_class(cache[query][query_type]['class']))
 
-	def query(self, q, commit=False):
-		log('SQLQuery: {q} [{commit}]'.format(q=q, commit=commit), level=1)
-		self.cur.execute(q)
-		if commit:
-			self.con.commit()
-		if self.cur.rowcount:
-			for record in self.cur:
-				yield wash_dict(record)
+		## Then, depending on the TYPE, different data payloads such as TTL etc will be added:
+		record_ttl = struct.pack('>I', cache[query][query_type]['ttl'])
+		record_length = struct.pack('>H', 4)
+		record_data = ip_to_bytes(ipaddress.ip_address(cache[query][query_type]['ip']))
 
-	def close(self, commit=True):
-		if commit:
-			self.con.commit()
-		self.cur.close()
-		self.con.close()
+		return pointer + record_type + record_class + record_ttl + record_length + record_data
 
-class Record:
-	def __init__(self, name, record_type, content=None, ttl=None, *args, **kwargs):
-		self.name = DNSLabel(name)
-		self.raw_qtype = record_type
-		if not content: content = name
-		content_list = None
 
-		record_class, self.record_type = TYPE_LOOKUP[record_type]
+	@abc.abstractmethod
+	def recurse_record(d, data_pos=0, recursed=0):
+		if len(d) <= 0: return 0, []
 
-		if self.record_type == QTYPE.SOA and len(args) == 2:
-			# add sensible times to SOA
-			args += (SERIAL,  config['soa']['refresh'], config['soa']['retry'], config['soa']['expire'], config['soa']['minimum']),
+		query = b''
+		query_length = d[0]
+		query += d[1:1+query_length]
+		parsed_data = 1+query_length
 
-		if self.record_type == QTYPE.TXT and len(args) == 1 and isinstance(args[0], str) and len(args[0]) > 255:
-			# wrap long TXT records as per dnslib's docs.
-			args = wrap(args[0], 255),
-
-		if not ttl:
-			if self.record_type in (QTYPE.NS, QTYPE.SOA):
-				ttl = 60
-			else:
-				ttl = 60
-
-		if content.count(' '):
-			if record_type == 'MX':
-				content, preference = content.split(' ')
-				content = record_class(content, preference=int(preference))
-			elif record_type == 'SRV':
-				content = content.split(' ')
-				content = record_class(*content)
-				# The values for the SRV class are:
-				# content, priority=0, weight=0, port=0, target=None
-			else:
-				content = record_class(*content.split(' '))
+		if query_length == 0 or recursed == 255: # Maximum recursion depth
+			return parsed_data, query
 		else:
-			content = record_class(content)
+			recused_parsed_data, recursed_query = dns.recurse_record(d[parsed_data:], data_pos=data_pos, recursed=recursed)
+			return parsed_data+recused_parsed_data, query + b'.' + recursed_query
 
-		self.rr = RR(rname=self.name, rtype=self.record_type, rdata=content, ttl=ttl,)
+	@abc.abstractmethod
+	def parse_queries(num, data):
+		data_pos = 0
+		records = OrderedDict()
+		for i in range(num):
+			parsed_data_index, record = dns.recurse_record(data['bytes'][data_pos:])
+			query_type = struct.unpack('>H', data['bytes'][parsed_data_index:parsed_data_index+2])[0]
+			query_class = struct.unpack('>H', data['bytes'][parsed_data_index+2:parsed_data_index+2+2])[0]
+			records[record[:-1]] = {'type' : query_type, 'class' : query_class, 'position' : data_pos}
+			data_pos += parsed_data_index
+		return parsed_data_index, records
 
-	def match(self, q):
-		return q.qname == self.name and (q.qtype == QTYPE.ANY or q.qtype == self.record_type)
+	@abc.abstractmethod
+	def parse_header_flags(headers):
+		QR = int(headers['binary'][0][0])
+		opcode = int(headers['binary'][0][1:5])
+		authorative_answer = int(headers['binary'][0][5])
+		truncation = int(headers['binary'][0][6])
+		recursion_desired = int(headers['binary'][0][7])
+		
+		recursion_available = int(headers['binary'][1][0])
+		zero_field = int(headers['binary'][1][1:4])
+		response_code = int(headers['binary'][1][4:8])
 
-	def sub_match(self, q):
-		# return self.record_type in (QTYPE.SOA, QTYPE.MX) and q.qtype in (QTYPE.SOA, QTYPE.MX) and q.qname.matchSuffix(self.name)
-		return self.record_type in (QTYPE.SOA, QTYPE.MX) and q.qtype == self.record_type and self.name.matchSuffix(q.qname)
+		return {
+			'QR' : QR,
+			'opcode' : opcode,
+			'authorative_answer' : authorative_answer,
+			'truncation' : truncation,
+			'recursion_desired' : recursion_desired,
+			'recursion_available' : recursion_available,
+			'zero_field' : zero_field,
+			'response_code' : response_code
+		}
 
-	def __str__(self):
-		return str(self.rr)
 
-class Resolver(ProxyResolver):
-	def __init__(self):
-		if config['forwarder']:
-			super().__init__(config['forwarder'], 53, 5)
-		self.zones = {}
-		self.last_cacheUpdate = time()
-		self.update_cache()
-		for zone, records in self.zones.items():
-			log('[Zone] Loaded {} with {} records.'.format(zone, len(records)))
+class serve_dns():
+	def __init__(self, *args, **kwargs):
+		if not 'interface' in kwargs: kwargs['interface'] = ''
+		if not 'protocol' in kwargs: kwargs['protocol'] = 'UDP'
+		if not 'port' in kwargs: kwargs['port'] = 53
+		## Update our self.variable = value references.
+		for var, val in kwargs.items():
+			self.__dict__[var] = val
 
-	def update_cache(self):
-		with postgres() as db:
-			for domain_row in list(db.query("SELECT * FROM domains;")):
-				records = []
-				for record in db.query("SELECT * FROM records WHERE domain={}".format(domain_row['id'])):
-					if record['type'] in TYPE_LOOKUP:
-						records.append(Record(record_type=record['type'], domain=domain_row['name'], name=record['name'], content=record['content'], ttl=record['ttl']))
-				self.zones[DNSLabel(domain_row['name'])] = records
+		if self.protocol == 'UDP':
+			self.socket = socket(AF_INET, SOCK_DGRAM) # UDP
+		else:
+			self.socket = socket()
+		## https://www.freepascal.org/docs-html/current/rtl/sockets/index-2.html
+		self.socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
+		self.socket.bind((self.interface, self.port))
+		#self.socket.setsockopt(SOL_SOCKET, SO_BROADCAST, 1)
 
-	def traverse_records(self, zone, request, reply, recursive=False):
-		if not zone: return reply
+		self.main_so_id = self.socket.fileno()
+		print(f'[-] Bound to: {{"interface" : "{kwargs["interface"]}", "port" : "{self.port}", "protocol" : "{self.protocol}"}}')
 
-		for record in zone:
-			if record.match(request.q):
-				reply.add_answer(record.rr)
-			elif recursive and request.q.qtype in TYPE_LOOKUP and TYPE_LOOKUP[request.q.qtype] in config['recursive'] and record.sub_match(request.q):
-				reply.add_answer(record.rr)
+		self.pollobj = epoll()
+		self.pollobj.register(self.main_so_id, EPOLLIN)
 
-	def resolve(self, request, handler):
-		if time() - self.last_cacheUpdate > 30:
-			self.update_cache()
+	def poll(self, timeout=0.001, fileno=None):
+		d = dict(self.pollobj.poll(timeout))
+		if fileno: return d[fileno] if fileno in d else None
+		return d
 
-		reply = request.reply()
-		self.traverse_records(self.zones.get(request.q.qname), request, reply)
+	def close(self):
+		self.pollobj.unregister(self.main_so_id)
+		self.socket.close()
 
-		if not reply.rr:
-			## No results found,
-			## try updating the cache.
-			self.update_cache()
-			self.traverse_records(self.zones.get(request.q.qname), request, reply)
+	def parse(self):
+		# The struct just maps how many bytes (not bits) per section in a DNS header.
+		# A graphic overview can be found here: https://www.freesoft.org/CIE/RFC/1035/40.htm
+		dns_header_struct = [2, 2, 2, 2, 2, 2]
+		# We then use that struct map to place the values into a dictionary with these keys (in order):
+		dns_header_fields = [
+			'transaction_id',
+			'flags',
+			'queries',
+			'answers_resource_records',
+			'authorities_resource_records',
+			'additional_resource_records',
+			'data'
+		]
 
-			if not reply.rr:
-				# Still no results,
-				# look for a SOA record for a higher level zone
-				self.traverse_records(self.zones.get(request.q.qname), request, reply, recursive=True)
+		if self.poll():
+			data, addr = self.socket.recvfrom(8192)
 
-		## TODO: Add a AUTHORATIVE SECTION if responses are empty?
+			## Convert and slot the data into the binary map representation
+			binary = list(byte_to_bin(data, bin_map=dns_header_struct))
 
-		if config['forwarder'] and not reply.rr:
-			return super().resolve(request, handler)
+			## Convert the binary representation into the protocol map
+			headers = {}
+			for index in range(len(binary)):
+				headers[dns_header_fields[index]] = {'binary' : binary[index], 'bytes' : bin_str_to_byte(binary[index]), 'hex' : None}
+				headers[dns_header_fields[index]]['hex'] = bytes_to_hex(headers[dns_header_fields[index]]['bytes'])
 
-		return reply
+			headers["queries"]["value"] = struct.unpack(">H", headers["queries"]["bytes"])[0]
 
-def signal_handler(signum, frame):
-	log('pid={}, got signal: {}, stopping...'.format(getpid(), signal.Signals(signum).name))
-	exit(0)
+			print(f'[+] Packet from: {{"addr": "{addr}", "queries" : {headers["queries"]["value"]}}}')
+			
+			#for key, val in headers.items():
+			#	print(key, val)
+			for option, value in dns.parse_header_flags(headers["flags"]).items():
+				headers['flags'][option] = value
 
-signal.signal(signal.SIGTERM, signal_handler)
-signal.signal(signal.SIGINT, signal_handler)
+			if not headers['flags']['QR'] == 0:
+				print(f'[-] Warning, Malformed data detected: {{"from" : "{addr}", "status" : "denied", "reason" : "Trying to impersonate a server to us."}}')
+				return
 
-resolver = Resolver()
-servers = [
-	DNSServer(resolver, port=53, address='localhost', tcp=True),
-	DNSServer(resolver, port=53, address='localhost', tcp=False),
-]
+			responses = OrderedDict()
+			with open('records.json', 'r') as fh:
+				cache = json.load(fh)
+
+			response = headers['transaction_id']['bytes']
+			response += b'\x81\x80' # Flags
+			response += b'\x00\x01' # Queries
+			response += b'\x00\x01' # answer rrs
+			response += b'\x00\x00' # authority rrs
+			response += b'\x00\x01' # additional rrs
+
+			query_block = b''
+			answer_block = b''
+
+			data_block, queries = dns.parse_queries(headers["queries"]["value"], headers["data"])
+			for index, query in enumerate(queries):
+				query_record = query.decode('UTF-8')
+				query_type = dns.human_query_type(queries[query]['type'])
+				if query_record in cache and query_type in cache[query_record]:
+					query_block += dns.build_query_field(query)
+					answer_block += dns.build_answer_field(query_type, query_record, queries[query], cache)
+					print(f'[ ] Query {index}: {query_record} -> {cache[query_record][query_type]["ip"]}')
+				elif query_record not in cache:
+					print(f'[-] DNS record {query_record} is not in cache: {cache}')
+				elif not query_type in cache[query]:
+					print(f'[-] DNS record {query_record} is missing a record for {query_type} requests')
+
+			response += query_block
+			response += answer_block
+
+			if headers['additional_resource_records']:
+				response += headers['data']['bytes'][data_block:]
+
+			if len(answer_block) > 0:
+				self.socket.sendto(response, addr)
+			
 
 if __name__ == '__main__':
-	for s in servers:
-		s.start_thread()
+	def sig_handler(signal, frame):
+		dhcp.close()
+		exit(0)
+	signal.signal(signal.SIGINT, sig_handler)
 
-	try:
-		while 1:
-			sleep(0.1)
-	except KeyboardInterrupt:
-		pass
-	finally:
-		for s in servers:
-			s.stop()
+	## Basic version of arg.parse() supporting:
+	## * --key=value
+	## * slimDHCP.py positional1 positional2
+	args = {}
+	positionals = []
+	for arg in sys.argv[1:]:
+		if '--' == arg[:2]:
+			if '=' in arg:
+				key, val = [x.strip() for x in arg[2:].split('=')]
+			else:
+				key, val = arg[2:], True
+			args[key] = val
+		else:
+			positionals.append(arg)
+
+	dhcp = serve_dns(**args)
+	while 1:
+		if dhcp.poll():
+			dhcp.parse()
