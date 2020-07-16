@@ -41,4 +41,4 @@ Basic syntax boils down to:<br>
 
 # Note
 
-Requires Linux, Python 3.3+ and has not been tested outside the lab.
+Requires Linux, Python 3.8+ and has not been tested outside the lab.
