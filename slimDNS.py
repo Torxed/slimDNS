@@ -143,7 +143,7 @@ class dns(abc.ABCMeta):
 			response += struct.pack('B', len(block))
 			response += block
 		# record | type | class
-		print('Query field:', response + b'\x00\x01' + b'\x00\x01')
+		#print('Query field:', response + b'\x00\x01' + b'\x00\x01')
 		return response + b'\x00' + b'\x00\x01' + b'\x00\x01'
 
 	@abc.abstractmethod
@@ -195,7 +195,6 @@ class dns(abc.ABCMeta):
 		records = OrderedDict()
 		for i in range(num):
 			parsed_data_index, record = dns.recurse_record(data['bytes'][data_pos:])
-			print('Got query from recurse:', record)
 			query_type = struct.unpack('>H', data['bytes'][parsed_data_index:parsed_data_index+2])[0]
 			query_class = struct.unpack('>H', data['bytes'][parsed_data_index+2:parsed_data_index+2+2])[0]
 			records[record[:-1]] = {'type' : query_type, 'class' : query_class, 'position' : data_pos}
@@ -233,9 +232,10 @@ class DNS_FRAME():
 
 		# The struct just maps how many bytes (not bits) per section in a DNS header.
 		# A graphic overview can be found here: https://www.freesoft.org/CIE/RFC/1035/40.htm
-		dns_header_struct = [2, 2, 2, 2, 2, 2]
+		dns_header_struct = [2, 2, 2, 2, 2, 2, 2]
 		# We then use that struct map to place the values into a dictionary with these keys (in order):
 		dns_header_fields = [
+			'length',
 			'transaction_id',
 			'flags',
 			'queries',
@@ -245,7 +245,6 @@ class DNS_FRAME():
 			'data'
 		]
 
-		print('RAW:', self.CLIENT_IDENTITY.buffer)
 		# data, addr = self.socket.recvfrom(8192)
 
 		## Convert and slot the data into the binary map representation
@@ -284,8 +283,6 @@ class DNS_FRAME():
 		query_block = b''
 		answer_block = b''
 
-		print('Got queries:', headers["queries"]["value"])
-		print('The data:', headers['data'])
 		data_block, queries = dns.parse_queries(headers["queries"]["value"], headers["data"])
 		for index, query in enumerate(queries):
 			query_record = query.decode('UTF-8')
@@ -305,10 +302,13 @@ class DNS_FRAME():
 		if headers['additional_resource_records']:
 			response += headers['data']['bytes'][data_block:]
 
+		response = struct.pack('>H', len(response)) + response
+
 		#if len(answer_block) > 0:
 		#	self.socket.sendto(response, addr)
 
-		yield (Events.CLIENT_RESPONSE_DATA, answer_block)
+		if len(answer_block) > 0:
+			yield (Events.CLIENT_RESPONSE_DATA, response)
 
 class DNS_TCP_CLIENT_IDENTITY():
 	def __init__(self, server, client_socket, address, on_close):
@@ -344,6 +344,7 @@ class DNS_TCP_CLIENT_IDENTITY():
 
 				if event in Events.DATA_EVENTS:
 					self.socket.send(data)
+					self.socket.close()
 
 class TCP_SERVER():
 	def __init__(self, *args, **kwargs):
