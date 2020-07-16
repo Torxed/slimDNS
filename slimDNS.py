@@ -116,6 +116,7 @@ class dns(abc.ABCMeta):
 	def record_type(t):
 		types = {
 			'a' : 1,
+			'ns' : 2,
 			'soa' : 6,
 			'srv' : 33
 		}
@@ -134,6 +135,7 @@ class dns(abc.ABCMeta):
 	def human_query_type(i):
 		types = {
 			1 : 'A',
+			2 : 'NS',
 			6 : 'SOA',
 			33 : 'SRV'
 		}
@@ -146,7 +148,7 @@ class dns(abc.ABCMeta):
 		for block in text.split(b'.'):
 			bytes_string += struct.pack('B', len(block))
 			bytes_string += block
-		return bytes_string
+		return bytes_string + b'\x00'
 
 	@abc.abstractmethod
 	def build_query_field(query):
@@ -154,45 +156,120 @@ class dns(abc.ABCMeta):
 
 		# record | type | class
 		#print('Query field:', response + b'\x00\x01' + b'\x00\x01')
-		return {response + b'\x00' + struct.pack('>H', query['type']) + b'\x00\x01'}
+		return {response + struct.pack('>H', query['_type']) + b'\x00\x01'}
 
 	@abc.abstractmethod
-	def A(query_type, query, query_meta, cache, pointers):
-		record_length = struct.pack('>H', 4)
-		record_data = ip_to_bytes(ipaddress.ip_address(cache[query][query_type]['ip']))
+	def A(query, cache, pointers):
+		record = query['record'].decode('UTF-8')
+		query_type = query['type']
 
-		return record_length, record_data, set()
+		ip = ip_to_bytes(ipaddress.ip_address(cache[record][query_type]['ip']))
+
+		record = b''.join(OrderedDict({
+			'record_name' : pointers[record]['bytes'] if record in pointers else bytes(record, 'UTF-8'),
+
+			'record_type' : struct.pack('>H', dns.record_type(cache[record][query_type]['type'])),
+			'class' : struct.pack('>H', dns.record_class(cache[record][query_type]['class'])),
+			'ttl' : struct.pack('>I', cache[record][query_type]['ttl']),
+			'length' : struct.pack('>H', len(ip)),
+
+			'data' : ip
+		}).values())
+
+		return {record}, set()
 
 	@abc.abstractmethod
-	def SOA(query_type, query, query_meta, cache, pointers):
-		record = OrderedDict({
-			'primary_server' : pointers[query] if query in pointers else bytes(query, 'UTF-8'),
-			'mailbox' : b'\x04root' + pointers[query] if query in pointers else bytes(query, 'UTF-8'),
+	def SOA(query, cache, pointers):
+		record = query['record'].decode('UTF-8')
+		query_type = query['type']
+
+		SOA_specifics = b''.join(OrderedDict({
+			'primary_server' : pointers[record]['bytes'] if record in pointers else bytes(record, 'UTF-8'),
+			'mailbox' : b'\x04root' + pointers[record]['bytes'] if record in pointers else bytes(record, 'UTF-8'),
 			'serial_number' : struct.pack('>i', 1),
 			'refresh_interval' : struct.pack('>i', 360),
 			'retry_interval' : struct.pack('>i', 360),
 			'expire_limit' : struct.pack('>i', 360),
 			'ninimum_ttl' : struct.pack('>i', 360)
-		})
+		}).values())
 
-		raw_response = b''.join(record.values())
+		record = b''.join(OrderedDict({
+			'domain_name' : pointers[record]['bytes'] if record in pointers else bytes(record, 'UTF-8'),
 
-		return len(raw_response), raw_response, set()
+			'record_type' : struct.pack('>H', dns.record_type(cache[record][query_type]['type'])),
+			'class' : struct.pack('>H', dns.record_class(cache[record][query_type]['class'])),
+			'ttl' : struct.pack('>I', cache[record][query_type]['ttl']),
+			'length' : struct.pack('>H', len(SOA_specifics)),
+
+			'data' : SOA_specifics
+		}).values())
+
+		return {record}, set() # len(raw_response), raw_response, set()
 
 	@abc.abstractmethod
-	def SRV(query_type, query, query_meta, cache, pointers):
-		srv_target = cache[query][query_type]['target']
-		record = OrderedDict({
-			'priority' : struct.pack('>H', cache[query][query_type]['priority']),
+	def NS(query, cache, pointers):
+		record = query['record'].decode('UTF-8')
+		query_type = query['type']
+
+		print('NS query:', query)
+		print('Type:', cache[record][query_type]['type'])
+
+		ns_target = cache[record][query_type]['target']
+
+		answer_frame = b''.join(OrderedDict({
+			'pointer' : pointers[query['record'].decode('UTF-8')]['bytes'],
+			'record_type' : struct.pack('>H', dns.record_type(cache[record][query_type]['type'])),
+			'class' : struct.pack('>H', dns.record_class(cache[record][query_type]['class'])),
+			'ttl' : struct.pack('>I', cache[record][query_type]['ttl']),
+			'length' : struct.pack('>H', len(dns.dns_string(bytes(ns_target, 'UTF-8')))),
+			'name_server' : dns.dns_string(bytes(ns_target, 'UTF-8'))
+		}).values())
+
+		nameserver_pointer = pointers[query['record'].decode('UTF-8')]['length'] + (len(answer_frame) - len(dns.dns_string(bytes(ns_target, 'UTF-8'))))
+
+		pointers[ns_target] = {'position' : nameserver_pointer, 'length' : pointers[query['record'].decode('UTF-8')]['length'] + len(answer_frame), 'bytes' : struct.pack('>H', int('11' + bin(nameserver_pointer)[2:].zfill(14), 2))}
+
+		additional_data = b''.join(OrderedDict({
+			'pointer' : pointers[ns_target]['bytes'], # Figure this one out
+			'type' : struct.pack('>H', dns.record_type('A')),
+			'class' : struct.pack('>H', dns.record_class('in')),
+			'ttl' : struct.pack('>i', 60),
+			'length' : struct.pack('>H', 4),
+			'data' : ip_to_bytes(ipaddress.ip_address(cache[ns_target]['A']['ip']))
+		}).values())
+
+		return {answer_frame}, {additional_data}
+
+	@abc.abstractmethod
+	def SRV(query, cache, pointers):
+		record = query['record'].decode('UTF-8')
+		query_type = query['type']
+
+		srv_target = cache[record][query_type]['target']
+
+		answer_data = b''.join(OrderedDict({
+			'priority' : struct.pack('>H', cache[record][query_type]['priority']),
 			'weight' : b'\x00\x00',
-			'port' : struct.pack('>H', cache[query][query_type]['port']),
+			'port' : struct.pack('>H', cache[record][query_type]['port']),
 			'target' : dns.dns_string(bytes(srv_target, 'UTF-8'))
-		})
+		}).values())
+		answer_frame = b''.join(OrderedDict({
+			'pointer' : pointers[query['record'].decode('UTF-8')]['bytes'],
+			'record_type' : struct.pack('>H', dns.record_type(cache[record][query_type]['type'])),
+			'class' : struct.pack('>H', dns.record_class(cache[record][query_type]['class'])),
+			'ttl' : struct.pack('>I', cache[record][query_type]['ttl']),
+			'length' : struct.pack('>H', len(answer_data)),
+			'data' : answer_data
+		#   'priority' : struct.pack('>H', cache[record][query_type]['priority']),
+		#   'weight' : b'\x00\x00',
+		#   'port' : struct.pack('>H', cache[record][query_type]['port']),
+		#   'target' : dns.dns_string(bytes(srv_target, 'UTF-8'))
+		}).values())
+		target_pointer_pos = pointers[query['record'].decode('UTF-8')]['length'] + (len(answer_frame) - len(dns.dns_string(bytes(srv_target, 'UTF-8'))))
 
-		pointers[srv_target] = positionX
+		pointers[srv_target] = {'position' : target_pointer_pos, 'length' : pointers[query['record'].decode('UTF-8')]['length'] + len(answer_frame), 'bytes' : struct.pack('>H', int('11' + bin(target_pointer_pos)[2:].zfill(14), 2))}
 
-		binary_pointer = '11' + bin(record_pointer_pos)[2:].zfill(14)
-		additional = OrderedDict({
+		additional_data = OrderedDict({
 			'pointer' : pointers[srv_target]['bytes'], # Figure this one out
 			'type' : struct.pack('>H', dns.record_type('A')),
 			'class' : struct.pack('>H', dns.record_class('in')),
@@ -201,26 +278,20 @@ class dns(abc.ABCMeta):
 			'data' : ip_to_bytes(ipaddress.ip_address(cache[srv_target]['A']['ip']))
 		})
 
-		answers = b''.join(record.values())
-		additionals = b''.join(additional.values())
+		additional_data = b''.join(additional_data.values())
 
-		return len(answers), {answers}, {additionals}
+		return {answer_frame}, {additional_data}
 
 	@abc.abstractmethod
-	def build_answer_field(query_type, query, query_meta, cache, pointers):
-		if not query in cache: raise KeyError(f'DNS record {query} is not in cache: {cache}')
-		if not query_type in cache[query]: ValueError(f'DNS record {query} is missing a record for {query_type} requests')
-
-		record_type = struct.pack('>H', dns.record_type(cache[query][query_type]['type']))
-		record_class = struct.pack('>H', dns.record_class(cache[query][query_type]['class']))
-
-		## Then, depending on the TYPE, different data payloads such as TTL etc will be added:
-		record_ttl = struct.pack('>I', cache[query][query_type]['ttl'])
+	def build_answer_field(query, cache, pointers):
+		record = query['record'].decode('UTF-8')
+		query_type = query['type']
+		if not record in cache: raise KeyError(f"DNS record {record} is not in cache: {cache}")
+		if not query_type in cache[record]: ValueError(f"DNS record {record} is missing a record for {query_type} requests")
 
 		if hasattr(dns, query_type):
-			record_length, record_data, additionals = getattr(dns, query_type)(query_type, query, query_meta, cache, pointers)
-
-			return {'header' : pointers[query] + record_type + record_class + record_ttl + struct.pack('>H', record_length), 'answers' : record_data, 'additionals' : additionals}
+			if(record_response := getattr(dns, query_type)(query, cache, pointers)):
+				return {'answers' : record_response[0], 'additionals' : record_response[1]}
 
 	@abc.abstractmethod
 	def recurse_record(d, data_pos=0, recursed=0):
@@ -243,13 +314,16 @@ class dns(abc.ABCMeta):
 		records = OrderedDict()
 		for i in range(num):
 			parsed_data_index, record = dns.recurse_record(data['bytes'][data_pos:])
-			
+
+			#print(record)
+			#b'\x07hvornum\x02se\x00\x00\x06\x00\x01'
+						
 			query_type = struct.unpack('>H', data['bytes'][parsed_data_index:parsed_data_index+2])[0]
 			parsed_data_index += 2
-			query_class = struct.unpack('>H', data['bytes'][parsed_data_index+2:parsed_data_index+2+2])[0]
+			query_class = struct.unpack('>H', data['bytes'][parsed_data_index:parsed_data_index+2])[0]
 			parsed_data_index += 2
 
-			records[record[:-1]] = {'type' : query_type, 'class' : query_class, 'position' : data_pos, 'record' : record[:-1]}
+			records[record[:-1]] = {'_type' : query_type, 'type' : dns.human_query_type(query_type), 'class' : query_class, 'position' : data_pos, 'record' : record[:-1], 'length' : parsed_data_index}
 			data_pos += parsed_data_index
 		return data_pos, records
 
@@ -334,7 +408,6 @@ class DNS_TCP_FRAME():
 		answers = set()
 		additionals = set()
 		authorities = set()
-		answer_header = b''
 
 		parsed_data_index, queries = dns.parse_queries(headers["queries"]["value"], headers["data"])
 
@@ -347,24 +420,24 @@ class DNS_TCP_FRAME():
 			# 11XXXXXX in binary represents that there's a pointer here in the DNS world.
 			# And it has to be exactly 16 bits (2 bytes)
 			position = sum(self.dns_header_struct)+queries[record]['position']
-			pointers[queries[record]['record'].decode('UTF-8')] = {'position' : position, 'bytes' : struct.pack('>H', int('11' + bin(position)[2:].zfill(14), 2))}
-
+			pointers[queries[record]['record'].decode('UTF-8')] = {'position' : position, 'length' : position+queries[record]['length'], 'bytes' : struct.pack('>H', int('11' + bin(position)[2:].zfill(14), 2))}
+		
 		for index, query in enumerate(queries):
 			query_record = query.decode('UTF-8')
-			query_type = dns.human_query_type(queries[query]['type'])
-			if query_type and query_record in cache and query_type in cache[query_record]:
+
+			if queries[query]['type'] and query_record in cache and queries[query]['type'] in cache[query_record]:
 				query_block |= dns.build_query_field(queries[query])
-				if(result := dns.build_answer_field(query_type, query_record, queries[query], cache)):
-					answer_header = result['header']
+
+				if(result := dns.build_answer_field(queries[query], cache, pointers)):
 					answers |= result['answers']
 					additionals |= result['additionals']
-					self.CLIENT_IDENTITY.server.log(f'[ ] Query {index+1}: {query_record} -> {cache[query_record][query_type]["ip"]}')
+					self.CLIENT_IDENTITY.server.log(f"[ ] Query {index+1}: {query_record} -> {cache[query_record][queries[query]['type']]['ip']}")
 				else:
-					self.CLIENT_IDENTITY.server.log(f'[ ] While building answer for query {index+1} ({query_record}), dns.{query_type} was detected as not implemented as a answer function.')
+					self.CLIENT_IDENTITY.server.log(f"[ ] While building answer for query {index+1} ({query_record}), dns.{queries[query]['type']} was detected as not implemented as a answer function.")
 			elif query_record not in cache:
 				self.CLIENT_IDENTITY.server.log(f'[-] DNS record {query_record} is not in cache: {cache}')
-			elif query_type and not query_type in cache[query_record]:
-				self.CLIENT_IDENTITY.server.log(f'[-] DNS record {query_record} is missing a record for {query_type} requests')
+			elif queries[query]['type'] and not queries[query]['type'] in cache[query_record]:
+				self.CLIENT_IDENTITY.server.log(f"[-] DNS record {query_record} is missing a record for {queries[query]['type']} requests")
 			else:
 				self.CLIENT_IDENTITY.server.log(f"[-] Record type {queries[query]['type']} is not implemented (While handling {query_record})")
 
@@ -380,7 +453,6 @@ class DNS_TCP_FRAME():
 		response += struct.pack('>H', len(authorities)) # authority rrs
 		response += struct.pack('>H', len(additionals))
 		response += b''.join(query_block)
-		response += answer_header
 		response += b''.join(answers)
 		response += b''.join(additionals)
 
