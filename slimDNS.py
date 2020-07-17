@@ -29,15 +29,28 @@ def server(mode=TCP, *args, **kwargs):
 
 def byte_to_bin(bs, bin_map=None):
 	"""
-	Has two functions:
+	byte_to_bin takes a `bytes` string, and groups bytes according to a map.
+	The map can be `bin_map=[2, 4, 2]` for instance, which will require a `bytes` string
+	of 6 in length. `byte_to_bin` will then split that bytes string into blocks of `2`, `4` and `2`.
 
-	1) Converts a bytes() type string into a binary representation in str() format
+	And then convert each block into a binary representation.
 
-	2) Boundles each binary representation in groups/blocks given by the bin_map list()
-	   [1, 1, 2] would group into [['00000000'], ['01010101'], ['10011010', '00110101']]
-	   - Any raiming data till be added in a list [...] at the end to not loose data.
+	As an example:
+	.. code-block:: py
 
-	TODO: handle bin_map = None
+	    >>> byte_to_bin(b'aabbcc', [2, 2, 2])
+	    [['01100001', '01100001'], ['01100010', '01100010'], ['01100011', '01100011']]
+
+	.. warning:: `bin_map = None` should return a binary representation of the `bytes` string as-is, but it currently doesn't.
+
+	:param bs: Any kind of `bytes` string is valid.
+	:type bs: bytes
+
+	:param bin_map: A list declaring the size of blocks to separate the `bs` into.
+	:type bin_map: list
+
+	:return: A list, containing the blocks declared to split in to, where each block is a list of binary representations per character in the block.
+	:rtype: list
 	"""
 	raw = []
 	index = 0
@@ -70,10 +83,13 @@ def bin_str_to_byte(s):
 def ip_to_bytes(ip_obj):
 	return struct.pack('>I', int(ip_obj))
 
+class IncompleteFrame(BaseException):
+	pass
+
 class Events():
 	"""
 	Events.<CONST> is a helper class to indicate which event is triggered.
-	Events are passed up through the event chain deep from within slimHTTP.
+	Events are passed up through the event chain deep from within slimDNS.
 
 	These events can be caught in your main `.poll()` loop, and react to different events.
 	"""
@@ -82,19 +98,13 @@ class Events():
 	SERVER_RESTART = 0b00000010
 
 	CLIENT_DATA = 0b01000000
-	CLIENT_REQUEST = 0b01000001
+	CLIENT_NO_QUERIES = 0b01000001
 	CLIENT_RESPONSE_DATA = 0b01000010
 	CLIENT_UPGRADED = 0b01000011
 	CLIENT_UPGRADE_ISSUE = 0b01000100
 	CLIENT_URL_ROUTED = 0b01000101
 	CLIENT_DATA_FRAGMENTED = 0b01000110
 	CLIENT_RESPONSE_PROXY_DATA = 0b01000111
-
-	WS_CLIENT_DATA = 0b11000000
-	WS_CLIENT_REQUEST = 0b11000001
-	WS_CLIENT_COMPLETE_FRAME = 0b11000010
-	WS_CLIENT_INCOMPLETE_FRAME = 0b11000011
-	WS_CLIENT_ROUTED = 0b11000100
 
 	NOT_YET_IMPLEMENTED = 0b00000000
 
@@ -106,6 +116,13 @@ class Events():
 
 class dns(abc.ABCMeta):
 	"""
+	dns is a abstract class, meant to make it easier to build individual components of DNS frames.
+	It also gives the option to convert a data-frame type in numerical value into human readable formats.
+
+	For instance:
+
+	DNS Query Type "1" converts to "A" with the help of `dns.human_query_type(1)`
+	DNS Query Type "A" converts to "1" with the help of `dns.record_type('A')`
 
 	Overview: https://www.freesoft.org/CIE/Topics/77.htm
 	Overview: https://www.freesoft.org/CIE/RFC/1035/39.htm
@@ -114,6 +131,21 @@ class dns(abc.ABCMeta):
 
 	@abc.abstractmethod
 	def record_type(t):
+		"""
+		Converts a human readable DNS Type into a integer representation.
+
+		As an example:
+		.. code-block:: py
+
+		    >>> record_type('SOA')
+		    6
+
+		:param t: A `str` representing a DNS Type, for instance `A` or `MX`.
+		:type t: str
+
+		:return: Returns the numerical representation of <Type>
+		:rtype: int
+		"""
 		types = {
 			'a' : 1,
 			'ns' : 2,
@@ -125,6 +157,21 @@ class dns(abc.ABCMeta):
 
 	@abc.abstractmethod
 	def record_class(c):
+		"""
+		Converts a human readable DNS Class into a integer representation.
+
+		As an example:
+		.. code-block:: py
+
+		    >>> record_class('IN')
+		    1
+
+		:param t: A `str` representing a DNS Class, for instance `IN`.
+		:type t: str
+
+		:return: Returns the numerical representation of <Class>
+		:rtype: int
+		"""
 		types = {
 			'in' : 1
 		}
@@ -133,6 +180,21 @@ class dns(abc.ABCMeta):
 
 	@abc.abstractmethod
 	def human_query_type(i):
+		"""
+		Converts a DNS Type from integer into a human readable representation.
+
+		As an example:
+		.. code-block:: py
+
+		    >>> human_query_type(33)
+		    SRV
+
+		:param i: A `int` representing a DNS Type, for instance 33.
+		:type i: int
+
+		:return: Returns the string representation of <Type>
+		:rtype: str
+		"""
 		types = {
 			1 : 'A',
 			2 : 'NS',
@@ -144,6 +206,22 @@ class dns(abc.ABCMeta):
 
 	@abc.abstractmethod
 	def dns_string(text:bytes):
+		"""
+		Builds a DNS String representation.
+		A DNS String consists of <length of block 1><block 1><length of block 2><block 2><null byte>
+
+		As an example:
+		.. code-block:: py
+
+		    >>> dns_string('example.com')
+		    \x07example\x03com\x00
+
+		:param text: A DNS text of any sort, usually a domain name or hostname
+		:type text: bytes
+
+		:return: Returns a DNS String compliant version of `text`
+		:rtype: bytes
+		"""
 		bytes_string = b''
 		for block in text.split(b'.'):
 			bytes_string += struct.pack('B', len(block))
@@ -152,14 +230,57 @@ class dns(abc.ABCMeta):
 
 	@abc.abstractmethod
 	def build_query_field(query):
-		response = dns.dns_string(query['record'])
+		"""
+		Converts a record or query into a DNS String with TYPE and CLASS.
 
-		# record | type | class
-		#print('Query field:', response + b'\x00\x01' + b'\x00\x01')
-		return {response + struct.pack('>H', query['_type']) + b'\x00\x01'}
+		As an example:
+		.. code-block:: py
+
+		    >>> build_query_field({'record' : 'example.com', '_type' : 1})
+		    \x07example\x03com\x00\x00\x01\x00\x01
+
+		Where the individual secions are: `record (len(record)) | type (4) | class (4)`
+
+		:param query: A query `dict` object with keys `type` and `record`.
+		:type query: dict
+
+		:return: Returns a data `set` of the record
+		:rtype: set
+		"""
+		record = dns.dns_string(query['record'])
+
+		#       record | type | class
+		return {record + struct.pack('>H', query['_type']) + b'\x00\x01'}
 
 	@abc.abstractmethod
 	def A(query, cache, pointers):
+		"""
+		A helper function to build a DNS "A" record.
+		It will build the following structure:
+
+		.. code-block::
+
+		    | Record Name   | // pointer if available
+		    | Record Type A | 
+		    | Record Class  | // Usually IN class
+		    | Record TTL    |
+		    | Record Length | // len(ip)
+		    | IP address    |
+		
+		As an example:
+		.. code-block:: py
+
+		    >>> A({'record' : 'example.com', '_type' : 1}, cache={'example.com' : {'A' : {'ip' : '192.168.0.1', 'type' : 'A', 'class' : 'IN', 'ttl' : 60}}}, pointers={})
+		    \x07example\x03com\x00\x00\x01\x00\x01
+
+		Where the individual secions are: `record (len(record)) | type (4) | class (4)`
+
+		:param query: A query `dict` object with keys `type` and `record`.
+		:type query: dict
+
+		:return: Returns a data `set` of the record
+		:rtype: set
+		"""
 		record = query['record'].decode('UTF-8')
 		query_type = query['type']
 
@@ -317,14 +438,17 @@ class dns(abc.ABCMeta):
 
 			#print(record)
 			#b'\x07hvornum\x02se\x00\x00\x06\x00\x01'
-						
-			query_type = struct.unpack('>H', data['bytes'][parsed_data_index:parsed_data_index+2])[0]
-			parsed_data_index += 2
-			query_class = struct.unpack('>H', data['bytes'][parsed_data_index:parsed_data_index+2])[0]
-			parsed_data_index += 2
 
-			records[record[:-1]] = {'_type' : query_type, 'type' : dns.human_query_type(query_type), 'class' : query_class, 'position' : data_pos, 'record' : record[:-1], 'length' : parsed_data_index}
-			data_pos += parsed_data_index
+			if len(data['bytes'][parsed_data_index:parsed_data_index+4]) >= 4:
+				query_type = struct.unpack('>H', data['bytes'][parsed_data_index:parsed_data_index+2])[0]
+				parsed_data_index += 2
+				query_class = struct.unpack('>H', data['bytes'][parsed_data_index:parsed_data_index+2])[0]
+				parsed_data_index += 2
+
+				records[record[:-1]] = {'_type' : query_type, 'type' : dns.human_query_type(query_type), 'class' : query_class, 'position' : data_pos, 'record' : record[:-1], 'length' : parsed_data_index}
+				data_pos += parsed_data_index
+			else:
+				raise IncompleteFrame(f"There's not enough data to unpack in queries.")
 		return data_pos, records
 
 	@abc.abstractmethod
@@ -384,22 +508,25 @@ class DNS_TCP_FRAME():
 			headers[self.dns_header_fields[index]] = {'binary' : binary[index], 'bytes' : bin_str_to_byte(binary[index]), 'hex' : None}
 			headers[self.dns_header_fields[index]]['hex'] = bytes_to_hex(headers[self.dns_header_fields[index]]['bytes'])
 
+		if not len(headers["queries"]["bytes"]) == 2:
+			yield (Events.CLIENT_NO_QUERIES, None)
+			return
+			
 		headers["queries"]["value"] = struct.unpack(">H", headers["queries"]["bytes"])[0]
-
 		self.CLIENT_IDENTITY.server.log(f'[+] Got {headers["queries"]["value"]} queries from {self.CLIENT_IDENTITY}')
+
+		if headers["queries"]["value"] <= 0:
+			yield (Events.CLIENT_NO_QUERIES, None)
+			return
 		
 		#for key, val in headers.items():
 		#	print(key, val)
 		for option, value in dns.parse_header_flags(headers["flags"]).items():
 			headers['flags'][option] = value
 
-		if not headers['flags']['QR'] == 0:
+		if not headers['flags']['QR'] == 0 or 'data' not in headers:
 			self.CLIENT_IDENTITY.server.log(f'[-] Warning, Malformed data detected: {self.CLIENT_IDENTITY}')
 			return
-
-		responses = OrderedDict()
-		with open('records.json', 'r') as fh:
-			cache = json.load(fh)
 
 		dns_header_len = len(self.dns_header_struct)
 		pointers = {}
@@ -409,7 +536,13 @@ class DNS_TCP_FRAME():
 		additionals = set()
 		authorities = set()
 
-		parsed_data_index, queries = dns.parse_queries(headers["queries"]["value"], headers["data"])
+		#print(self.CLIENT_IDENTITY.buffer)
+		#print(headers)
+		try:
+			parsed_data_index, queries = dns.parse_queries(headers["queries"]["value"], headers["data"])
+		except IncompleteFrame as e:
+			self.CLIENT_IDENTITY.server.log(f'[*] Warning, Malformed data detected from {self.CLIENT_IDENTITY}: {e}')
+			return
 
 		## First we point to the position in the query of the name we're resolving.
 		## (to avoid appending unessecary data)
@@ -425,18 +558,18 @@ class DNS_TCP_FRAME():
 		for index, query in enumerate(queries):
 			query_record = query.decode('UTF-8')
 
-			if queries[query]['type'] and query_record in cache and queries[query]['type'] in cache[query_record]:
+			if queries[query]['type'] and query_record in self.CLIENT_IDENTITY.server.database and queries[query]['type'] in self.CLIENT_IDENTITY.server.database[query_record]:
 				query_block |= dns.build_query_field(queries[query])
 
-				if(result := dns.build_answer_field(queries[query], cache, pointers)):
+				if(result := dns.build_answer_field(queries[query], self.CLIENT_IDENTITY.server.database, pointers)):
 					answers |= result['answers']
 					additionals |= result['additionals']
-					self.CLIENT_IDENTITY.server.log(f"[ ] Query {index+1}: {query_record} -> {cache[query_record][queries[query]['type']]['ip']}")
+					self.CLIENT_IDENTITY.server.log(f"[ ] Query {index+1}: {query_record} -> {self.CLIENT_IDENTITY.server.database[query_record][queries[query]['type']]['ip']}")
 				else:
 					self.CLIENT_IDENTITY.server.log(f"[ ] While building answer for query {index+1} ({query_record}), dns.{queries[query]['type']} was detected as not implemented as a answer function.")
-			elif query_record not in cache:
-				self.CLIENT_IDENTITY.server.log(f'[-] DNS record {query_record} is not in cache: {cache}')
-			elif queries[query]['type'] and not queries[query]['type'] in cache[query_record]:
+			elif query_record not in self.CLIENT_IDENTITY.server.database:
+				self.CLIENT_IDENTITY.server.log(f'[-] DNS record {query_record} is not in database: {self.CLIENT_IDENTITY.server.database.keys()}')
+			elif queries[query]['type'] and not queries[query]['type'] in self.CLIENT_IDENTITY.server.database[query_record]:
 				self.CLIENT_IDENTITY.server.log(f"[-] DNS record {query_record} is missing a record for {queries[query]['type']} requests")
 			else:
 				self.CLIENT_IDENTITY.server.log(f"[-] Record type {queries[query]['type']} is not implemented (While handling {query_record})")
@@ -573,6 +706,15 @@ class TCP_SERVER():
 		
 		self.pollobj = epoll()
 		self.pollobj.register(self.main_sock_fileno, EPOLLIN)
+
+		self.database = {}
+		#if os.path.isfile('./records.json'):
+		#	with open('records.json', 'r') as fh:
+		#		self.database = json.load(fh)
+
+	def records(self, f, *args, **kwargs):
+		if type(db := f(self)) == dict:
+			self.database = db
 
 	def log(self, *args, **kwargs):
 		"""
