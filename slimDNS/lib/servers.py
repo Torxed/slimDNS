@@ -62,6 +62,26 @@ class TCP_SERVER():
 		if type(db := f(self)) == dict:
 			self.database = db
 
+	def add(self, record, record_type, target, ttl=60, *, **kwargs):
+		if not record in self.database: self.database[record] = {}
+		self.database[record][record_type] = {'target' : target, 'ttl' : ttl, **kwargs}
+
+	def remove(self, record, record_type):
+		if not record in self.database: return None
+		if not record_type in self.database[record]: return None
+
+		del(self.database[record][record_type])
+		if len(self.database[record]) == 0:
+			del(self.database[record])
+
+		return True
+
+	def update(self, record, record_type, *, **kwargs):
+		if not record in self.database: return None
+		if not record_type in self.database[record]: return None
+
+		self.database[record][record_type] = {**self.database[record][record_type], **kwargs}
+
 	def log(self, *args, **kwargs):
 		"""
 		A simple print wrapper, placeholder for more advanced logging in the future.
