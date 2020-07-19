@@ -2,8 +2,8 @@
 
 A simple DNS server written in vanilla Python.
 
- * slimHTTP [documentation](https://slimhttp.readthedocs.io/en/master)
- * slimHTTP [discord](https://discord.gg/CMjZbwR) server
+ * slimDNS [documentation](https://slimdns.readthedocs.io/en/master)
+ * slimDNS [discord](https://discord.gg/CMjZbwR) server
 
 # Installation
 
