@@ -100,15 +100,15 @@ class Events():
 	CLIENT_DATA = 0b01000000
 	CLIENT_NO_QUERIES = 0b01000001
 	CLIENT_RESPONSE_DATA = 0b01000010
-	CLIENT_UPGRADED = 0b01000011
-	CLIENT_UPGRADE_ISSUE = 0b01000100
-	CLIENT_URL_ROUTED = 0b01000101
-	CLIENT_DATA_FRAGMENTED = 0b01000110
-	CLIENT_RESPONSE_PROXY_DATA = 0b01000111
+	CLIENT_INVALID_DATA = 0b01000011
+	# = 0b01000100
+	# = 0b01000101
+	# = 0b01000110
+	# = 0b01000111
 
 	NOT_YET_IMPLEMENTED = 0b00000000
 
-	DATA_EVENTS = (CLIENT_RESPONSE_DATA, CLIENT_URL_ROUTED, CLIENT_RESPONSE_PROXY_DATA)
+	DATA_EVENTS = (CLIENT_RESPONSE_DATA,)
 
 	def convert(_int):
 		def_map = {v: k for k, v in Events.__dict__.items() if not k.startswith('__') and k != 'convert'}
@@ -205,7 +205,7 @@ class dns(abc.ABCMeta):
 		return types[i]
 
 	@abc.abstractmethod
-	def dns_string(text:bytes):
+	def string(text:bytes):
 		"""
 		Builds a DNS String representation.
 		A DNS String consists of <length of block 1><block 1><length of block 2><block 2><null byte>
@@ -213,15 +213,16 @@ class dns(abc.ABCMeta):
 		As an example:
 		.. code-block:: py
 
-		    >>> dns_string('example.com')
+		    >>> dns.string('example.com')
 		    \x07example\x03com\x00
 
-		:param text: A DNS text of any sort, usually a domain name or hostname
+		:param text: A text of any sort, usually a domain name or hostname
 		:type text: bytes
 
 		:return: Returns a DNS String compliant version of `text`
 		:rtype: bytes
 		"""
+		if type(text) == str: text = bytes(text, 'UTF-8')
 		bytes_string = b''
 		for block in text.split(b'.'):
 			bytes_string += struct.pack('B', len(block))
@@ -247,13 +248,13 @@ class dns(abc.ABCMeta):
 		:return: Returns a data `set` of the record
 		:rtype: set
 		"""
-		record = dns.dns_string(query['record'])
+		record = dns.string(query.record)
 
-		#       record | type | class
-		return {record + struct.pack('>H', query['_type']) + b'\x00\x01'}
+		#      record | type | class
+		return record + struct.pack('>H', dns.record_type(query.type)) + b'\x00\x01'
 
 	@abc.abstractmethod
-	def A(query, cache, pointers):
+	def A(frame, query, database):
 		"""
 		A helper function to build a DNS "A" record.
 		It will build the following structure:
@@ -270,7 +271,7 @@ class dns(abc.ABCMeta):
 		As an example:
 		.. code-block:: py
 
-		    >>> A({'record' : 'example.com', '_type' : 1}, cache={'example.com' : {'A' : {'ip' : '192.168.0.1', 'type' : 'A', 'class' : 'IN', 'ttl' : 60}}}, pointers={})
+		    >>> A({'record' : 'example.com', '_type' : 1}, database={'example.com' : {'A' : {'ip' : '192.168.0.1', 'type' : 'A', 'class' : 'IN', 'ttl' : 60}}}, pointers={})
 		    \x07example\x03com\x00\x00\x01\x00\x01
 
 		Where the individual secions are: `record (len(record)) | type (4) | class (4)`
@@ -281,122 +282,98 @@ class dns(abc.ABCMeta):
 		:return: Returns a data `set` of the record
 		:rtype: set
 		"""
-		record = query['record'].decode('UTF-8')
-		query_type = query['type']
+		ip = ip_to_bytes(ipaddress.ip_address(database[query.record][query.type]['target']))
 
-		ip = ip_to_bytes(ipaddress.ip_address(cache[record][query_type]['ip']))
-
-		record = b''.join(OrderedDict({
-			'record_name' : pointers[record]['bytes'] if record in pointers else bytes(record, 'UTF-8'),
-
-			'record_type' : struct.pack('>H', dns.record_type(cache[record][query_type]['type'])),
-			'class' : struct.pack('>H', dns.record_class(cache[record][query_type]['class'])),
-			'ttl' : struct.pack('>I', cache[record][query_type]['ttl']),
+		return ANSWER(frame, DNS_FIELDS({
+			'record_name' : dns.pointer(query.record),
+			'record_type' : struct.pack('>H', dns.record_type('A')),
+			'class' : struct.pack('>H', dns.record_class('IN')),
+			'ttl' : struct.pack('>I', database[query.record][query.type]['ttl']),
 			'length' : struct.pack('>H', len(ip)),
 
 			'data' : ip
-		}).values())
-
-		return {record}, set()
+		}))
 
 	@abc.abstractmethod
-	def SOA(query, cache, pointers):
-		record = query['record'].decode('UTF-8')
-		query_type = query['type']
-
-		SOA_specifics = b''.join(OrderedDict({
-			'primary_server' : pointers[record]['bytes'] if record in pointers else bytes(record, 'UTF-8'),
-			'mailbox' : b'\x04root' + pointers[record]['bytes'] if record in pointers else bytes(record, 'UTF-8'),
+	def SOA(frame, query, database):
+		SOA_specifics = DNS_FIELDS({
+			'primary_server' : dns.pointer(database[query.record][query.type]['target']),
+			'mailbox' : dns.email(f'root@{query.record}'),
 			'serial_number' : struct.pack('>i', 1),
 			'refresh_interval' : struct.pack('>i', 360),
 			'retry_interval' : struct.pack('>i', 360),
 			'expire_limit' : struct.pack('>i', 360),
 			'ninimum_ttl' : struct.pack('>i', 360)
-		}).values())
+		})
 
-		record = b''.join(OrderedDict({
-			'domain_name' : pointers[record]['bytes'] if record in pointers else bytes(record, 'UTF-8'),
+		return ANSWER(frame, DNS_FIELDS({
+			'domain_name' : dns.pointer(query.record),
 
-			'record_type' : struct.pack('>H', dns.record_type(cache[record][query_type]['type'])),
-			'class' : struct.pack('>H', dns.record_class(cache[record][query_type]['class'])),
-			'ttl' : struct.pack('>I', cache[record][query_type]['ttl']),
+			'record_type' : struct.pack('>H', dns.record_type('SOA')),
+			'class' : struct.pack('>H', dns.record_class('IN')),
+			'ttl' : struct.pack('>I', database[query.record][query.type]['ttl']),
 			'length' : struct.pack('>H', len(SOA_specifics)),
 
 			'data' : SOA_specifics
-		}).values())
-
-		return {record}, set() # len(raw_response), raw_response, set()
+		}))
 
 	@abc.abstractmethod
-	def NS(query, cache, pointers):
-		record = query['record'].decode('UTF-8')
-		query_type = query['type']
+	def NS(frame, query, database):
+		ns_target = database[query.record][query.type]['target']
 
-		print('NS query:', query)
-		print('Type:', cache[record][query_type]['type'])
+		answer_frame = ANSWER(frame, {
+			'pointer' : dns.pointer(query.record),
+			'record_type' : struct.pack('>H', dns.record_type('NS')),
+			'class' : struct.pack('>H', dns.record_class('IN')),
+			'ttl' : struct.pack('>I', database[query.record][query.type]['ttl']),
+			'length' : struct.pack('>H', len(dns.string(ns_target))),
+			'name_server' : dns.string(ns_target)
+		})
 
-		ns_target = cache[record][query_type]['target']
-
-		answer_frame = b''.join(OrderedDict({
-			'pointer' : pointers[query['record'].decode('UTF-8')]['bytes'],
-			'record_type' : struct.pack('>H', dns.record_type(cache[record][query_type]['type'])),
-			'class' : struct.pack('>H', dns.record_class(cache[record][query_type]['class'])),
-			'ttl' : struct.pack('>I', cache[record][query_type]['ttl']),
-			'length' : struct.pack('>H', len(dns.dns_string(bytes(ns_target, 'UTF-8')))),
-			'name_server' : dns.dns_string(bytes(ns_target, 'UTF-8'))
-		}).values())
-
-		nameserver_pointer = pointers[query['record'].decode('UTF-8')]['length'] + (len(answer_frame) - len(dns.dns_string(bytes(ns_target, 'UTF-8'))))
-
-		pointers[ns_target] = {'position' : nameserver_pointer, 'length' : pointers[query['record'].decode('UTF-8')]['length'] + len(answer_frame), 'bytes' : struct.pack('>H', int('11' + bin(nameserver_pointer)[2:].zfill(14), 2))}
-
-		additional_data = b''.join(OrderedDict({
-			'pointer' : pointers[ns_target]['bytes'], # Figure this one out
+		additional_data = ADDITIONAL(frame, {
+			'pointer' : dns.pointer(ns_target), # Pointers gets resolved at build time, and can be safely stored as a standalone record.
 			'type' : struct.pack('>H', dns.record_type('A')),
 			'class' : struct.pack('>H', dns.record_class('in')),
 			'ttl' : struct.pack('>i', 60),
 			'length' : struct.pack('>H', 4),
-			'data' : ip_to_bytes(ipaddress.ip_address(cache[ns_target]['A']['ip']))
-		}).values())
+			'data' : ip_to_bytes(ipaddress.ip_address(database[ns_target]['A']['target']))
+		})
 
-		return {answer_frame}, {additional_data}
+		return answer_frame, additional_data
 
 	@abc.abstractmethod
-	def SRV(query, cache, pointers):
-		record = query['record'].decode('UTF-8')
-		query_type = query['type']
-
-		srv_target = cache[record][query_type]['target']
+	def SRV(frame, query, database):
+		srv_target = cache[record][query.type]['target']
 
 		answer_data = b''.join(OrderedDict({
-			'priority' : struct.pack('>H', cache[record][query_type]['priority']),
+			'priority' : struct.pack('>H', cache[record][query.type]['priority']),
 			'weight' : b'\x00\x00',
-			'port' : struct.pack('>H', cache[record][query_type]['port']),
-			'target' : dns.dns_string(bytes(srv_target, 'UTF-8'))
+			'port' : struct.pack('>H', cache[record][query.type]['port']),
+			'target' : dns.string(bytes(srv_target, 'UTF-8'))
 		}).values())
 		answer_frame = b''.join(OrderedDict({
-			'pointer' : pointers[query['record'].decode('UTF-8')]['bytes'],
-			'record_type' : struct.pack('>H', dns.record_type(cache[record][query_type]['type'])),
-			'class' : struct.pack('>H', dns.record_class(cache[record][query_type]['class'])),
-			'ttl' : struct.pack('>I', cache[record][query_type]['ttl']),
+			'pointer' : pointers[query.record].bytes,
+			'record_type' : struct.pack('>H', dns.record_type('SRV')),
+			'class' : struct.pack('>H', dns.record_class('IN')),
+			'ttl' : struct.pack('>I', cache[record][query.type]['ttl']),
 			'length' : struct.pack('>H', len(answer_data)),
 			'data' : answer_data
-		#   'priority' : struct.pack('>H', cache[record][query_type]['priority']),
+		#   'priority' : struct.pack('>H', cache[record][query.type]['priority']),
 		#   'weight' : b'\x00\x00',
-		#   'port' : struct.pack('>H', cache[record][query_type]['port']),
-		#   'target' : dns.dns_string(bytes(srv_target, 'UTF-8'))
+		#   'port' : struct.pack('>H', cache[record][query.type]['port']),
+		#   'target' : dns.string(bytes(srv_target, 'UTF-8'))
 		}).values())
-		target_pointer_pos = pointers[query['record'].decode('UTF-8')]['length'] + (len(answer_frame) - len(dns.dns_string(bytes(srv_target, 'UTF-8'))))
 
-		pointers[srv_target] = {'position' : target_pointer_pos, 'length' : pointers[query['record'].decode('UTF-8')]['length'] + len(answer_frame), 'bytes' : struct.pack('>H', int('11' + bin(target_pointer_pos)[2:].zfill(14), 2))}
+		target_pointer_pos = pointers[query.record]['length'] + (len(answer_frame) - len(dns.string(bytes(srv_target, 'UTF-8'))))
+		pointers[srv_target] = dns.pointer(srv_target, target_pointer_pos, next_neightbour=target_pointer_pos+len(answer_frame))
 
 		additional_data = OrderedDict({
-			'pointer' : pointers[srv_target]['bytes'], # Figure this one out
+			'pointer' : pointers[srv_target].bytes, # Figure this one out
 			'type' : struct.pack('>H', dns.record_type('A')),
 			'class' : struct.pack('>H', dns.record_class('in')),
 			'ttl' : struct.pack('>i', 60),
 			'length' : struct.pack('>H', 4),
-			'data' : ip_to_bytes(ipaddress.ip_address(cache[srv_target]['A']['ip']))
+			'data' : ip_to_bytes(ipaddress.ip_address(cache[srv_target]['A']['target']))
 		})
 
 		additional_data = b''.join(additional_data.values())
@@ -404,15 +381,12 @@ class dns(abc.ABCMeta):
 		return {answer_frame}, {additional_data}
 
 	@abc.abstractmethod
-	def build_answer_field(query, cache, pointers):
-		record = query['record'].decode('UTF-8')
-		query_type = query['type']
-		if not record in cache: raise KeyError(f"DNS record {record} is not in cache: {cache}")
-		if not query_type in cache[record]: ValueError(f"DNS record {record} is missing a record for {query_type} requests")
+	def build_answer_to_query(frame, query, database):
+		if not query.record in database: raise KeyError(f"DNS record {query.record} is not in database: {database}")
+		if not query.type in database[query.record]: ValueError(f"DNS record {query.record} is missing the {query.type} type")
 
-		if hasattr(dns, query_type):
-			if(record_response := getattr(dns, query_type)(query, cache, pointers)):
-				return {'answers' : record_response[0], 'additionals' : record_response[1]}
+		if hasattr(dns, query.type):
+			return getattr(dns, query.type)(frame, query, database)
 
 	@abc.abstractmethod
 	def recurse_record(d, data_pos=0, recursed=0):
@@ -430,26 +404,33 @@ class dns(abc.ABCMeta):
 			return parsed_data+recused_parsed_data, query + b'.' + recursed_query
 
 	@abc.abstractmethod
-	def parse_queries(num, data):
+	def IDNA(record):
+		if type(record) == bytes: record = record.decode('UTF-8')
+		return record.encode('idna')
+
+	@abc.abstractmethod
+	def extract_queries(DNS_FRAME):#num, data):
 		data_pos = 0
 		records = OrderedDict()
-		for i in range(num):
-			parsed_data_index, record = dns.recurse_record(data['bytes'][data_pos:])
+		for i in range(DNS_FRAME.FRAME_DATA["queries"]["value"]):
+			parsed_data_index, record = dns.recurse_record(DNS_FRAME.FRAME_DATA["data"]['bytes'][data_pos:])
 
 			#print(record)
 			#b'\x07hvornum\x02se\x00\x00\x06\x00\x01'
 
-			if len(data['bytes'][parsed_data_index:parsed_data_index+4]) >= 4:
-				query_type = struct.unpack('>H', data['bytes'][parsed_data_index:parsed_data_index+2])[0]
+			if len(DNS_FRAME.FRAME_DATA["data"]['bytes'][parsed_data_index:parsed_data_index+4]) >= 4:
+				query_type = struct.unpack('>H', DNS_FRAME.FRAME_DATA["data"]['bytes'][parsed_data_index:parsed_data_index+2])[0]
 				parsed_data_index += 2
-				query_class = struct.unpack('>H', data['bytes'][parsed_data_index:parsed_data_index+2])[0]
+				query_class = struct.unpack('>H', DNS_FRAME.FRAME_DATA["data"]['bytes'][parsed_data_index:parsed_data_index+2])[0]
 				parsed_data_index += 2
 
-				records[record[:-1]] = {'_type' : query_type, 'type' : dns.human_query_type(query_type), 'class' : query_class, 'position' : data_pos, 'record' : record[:-1], 'length' : parsed_data_index}
+				## We encode each record with the IDNA standard, to support non-ascii domain names like "hehö.se"
+				records[dns.IDNA(record[:-1])] = QUERY(DNS_FRAME, query_type=dns.human_query_type(query_type), record=dns.IDNA(record[:-1]), query_class=query_class)
 				data_pos += parsed_data_index
 			else:
 				raise IncompleteFrame(f"There's not enough data to unpack in queries.")
-		return data_pos, records
+		DNS_FRAME.remainer = DNS_FRAME.FRAME_DATA["data"]['bytes'][data_pos:]
+		return records
 
 	@abc.abstractmethod
 	def parse_header_flags(headers):
@@ -474,9 +455,273 @@ class dns(abc.ABCMeta):
 			'response_code' : response_code
 		}
 
+	@abc.abstractmethod
+	def email(mail):
+		recipient, domain = mail.split('@', 1)
+		return dns.pointer(domain, prepend=dns.string(recipient)[:-1]) # the DNS string in a mail record does not end with \x00, so we need to remove it.
+
+	@abc.abstractmethod
+	def pointer(record, prepend=b'', tail=b''):
+		return POINTER(record, prepend, tail)
+
+class DNS_FIELDS(OrderedDict):
+	def __init__(self, *args, **kwargs):
+		OrderedDict.__init__(self, *args, **kwargs)
+
+	def __len__(self):
+		total = 0
+		for key, val in self.items():
+			total += len(val)
+		return total
+
+	def build(self, header_length, previous_block):
+		data = b''
+		for val in self.values():
+			if type(val) == POINTER: val = val.resolve(header_length, previous_block)
+			if type(val) == DNS_FIELDS: val = val.build(header_length, previous_block)
+			data += val
+		return data
+
+class FINISHED_FRAME():
+	def __init__(self, data):
+		self.data = data
+
+class BLOCK():
+	def __init__(self, FRAME, previous_block=None):
+		self.built = False
+		self.data = set()
+		self._pointers = OrderedDict()
+		self.FRAME = FRAME
+		self.previous_block = previous_block
+
+	def __len__(self):
+		return len(self.data)
+
+	def __gt__(self, what):
+		return len(self.data) > what
+
+	def __iadd__(self, obj):
+		self.data |= {obj}
+		return self
+
+	def __add__(self, obj):
+		if not self.built:
+			self.built = self.build(None)
+		self.built += obj.build(self.built)
+
+		return self
+
+	def __ior__(self, obj):
+		"""
+		Called when doing |=  operations.
+		__or__ and __ror__ for |, __ior__ for |= if you need that specifically.   //FarmArt @ Disco Py
+		"""
+		return self
+
+	def build(self, previous_block):
+		build = b''
+		for part in self.data:
+			if hasattr(part, 'build'):
+				build += part.build(previous_block)
+			else:
+				build += part.bytes
+		return build
+
+		#return self.bytes
+
+	@property
+	def pointers(self):
+		return self._pointers
+
+	@property
+	def bytes(self):
+		if self.built:
+			return self.built
+
+		final_frame = b''
+		for part in self.data:
+			final_frame += part.bytes
+		return final_frame
+
+
+class RAW_FIELD():
+	def __init__(self, data:bytes):
+		self._data = data
+
+class DNS_FIELD():
+	def __init__(self, FRAME, data):
+		self.FRAME = FRAME
+		self.data = data
+	def build(self, previous_block):
+		if type(self.data) == RAW_FIELD: return self.data._data
+
+		data = b''
+		for val in self.data.values():
+			if type(val) == POINTER: val = val.resolve(self.FRAME.response.header_length, previous_block)
+			if type(val) == DNS_FIELDS: val = val.build(self.FRAME.response.header_length, previous_block)
+			data += val
+		return data
+
+class ADDITIONAL(DNS_FIELD):
+	def __repr__(self):
+		return f"<ADDITIONAL BLOCK({len(self.data)})>"
+
+class ANSWER(DNS_FIELD):
+	def __repr__(self):
+		return f"<ANSWER BLOCK({len(self.data)})>"
+
+class ANSWERS(BLOCK):
+	def __repr__(self):
+		return f"<ANSWERS BLOCK({len(self.data)})>"
+
+class ADDITIONALS(BLOCK):
+	def __repr__(self):
+		return f"<ADDITIONALS BLOCK({len(self.data)})>"
+
+class QUERIES(BLOCK):
+	def __repr__(self):
+		return f"<QUERIES BLOCK({len(self.data)})>"
+
+class DNS_RESPONSE():
+	def __init__(self, DNS_FRAME, header_length):
+		self.DNS_FRAME = DNS_FRAME
+		self.header_length = header_length
+		self._queries = QUERIES(self.DNS_FRAME)
+		self._answers = ANSWERS(self.DNS_FRAME, self.queries)
+		self._authorities = set()
+		self._additionals = ADDITIONALS(self.DNS_FRAME, self.answers)
+
+	def __gt__(self, what):
+		return self._answers > what
+
+	def __ior__(self, obj):
+		"""
+		Called when doing |=  operations.
+		__or__ and __ror__ for |, __ior__ for |= if you need that specifically.   //FarmArt @ Disco Py
+		"""
+		if type(obj) == QUERY:
+			self._queries += obj
+		return self
+
+	def __iadd__(self, obj):
+		if type(obj) in (list, tuple, set):
+			for item in obj:
+				self += item
+		elif type(obj) == QUERY:
+			self._queries += obj
+		elif type(obj) == ANSWER:
+			self._answers += obj
+		elif type(obj) == ADDITIONAL:
+			self._additionals += obj
+		else:
+			raise ValueError(f'Unknown type trying to be added to {self}: {obj} ({type(obj)})')
+		
+		return self
+
+	@property
+	def queries(self):
+		return self._queries
+
+	@property
+	def answers(self):
+		return self._answers
+
+	@property
+	def additionals(self):
+		return self._additionals
+
+	@property
+	def authorities(self):
+		return self._authorities
+
+	@property
+	def assemble(self):
+		return self._queries + self._answers + self._additionals
+
+class POINTER():
+	"""
+	Pointers is a pretty simple data struct.
+	The problem is that we need to resolve the pointers as the answers are being built.
+
+	To do this, we'll store the reference in `self.record`, and once we call `.resolve()`.
+	The POINTER will then look through the currently-being-built-response for a reference
+	so the `.record` value. If found, it inserts itself as a pointer - if not, it will simply
+	put the record name as-is. That will probably break things tho.
+
+	TODO: Add itself to the additionals section if possible?
+
+	:param record: A string to the record/name we wan't to resolve later
+	:type record: str
+
+	:param prepend: Raw bytes to pre-pend the pointer with
+	:type prepend: bytes optional
+
+	:param tail: Raw bytes to add after the pointer
+	:type tail: bytes optional 
+	"""
+
+	## First we point to the position in the query of the name we're resolving.
+	## (to avoid appending unessecary data)
+	# Pointers:
+	#  https://www.freesoft.org/CIE/RFC/1035/43.htm
+	#  https://osqa-ask.wireshark.org/questions/50806/help-understanding-dns-packet-data
+	
+	# 11XXXXXX in binary represents that there's a pointer here in the DNS world.
+	# And it has to be exactly 16 bits (2 bytes)
+	# self.pointer_pos = sum(self.RAW_FRAME.dns_header_struct)+stream_start
+	# self.pointer = struct.pack('>H', int('11' + bin(self.pointer_pos)[2:].zfill(14), 2))
+	# self.next_neightbour = self.pointer_pos + stream_length
+
+	def __init__(self, record, prepend=b'', tail=b''):
+		self.record = record
+		self.prepend = prepend
+		self.tail = tail
+
+	def __len__(self):
+		return len(self.prepend) + 2 + len(self.tail)
+
+	def resolve(self, header_length, current_frame_build):
+		"""
+		`resolve` will look through the current frame being built, as well as take the
+		header length into account when self-imploading the `.record` into a `bytes` representation
+		of the position inside the currently-being-built-frame where the record was found.
+
+		:param header_length: The header length is different in UDP and TCP, there for the length must be known upon resolving.
+		:type header_length: int
+
+		:param current_frame_build: Raw `bytes` of an answer being built
+		:type current_frame_build: bytes
+
+		:return: A `bytes` representation of the pointer
+		:rtype: bytes
+		"""
+		if (record := dns.string(self.record)) in current_frame_build:
+			return self.prepend + struct.pack('>H', int('11' + bin(current_frame_build.find(record)+header_length)[2:].zfill(14), 2)) + self.tail
+		return self.prepend + record + self.tail
+
+class QUERY():
+	def __init__(self, RAW_FRAME, query_type, record, query_class='IN'):
+		if type(query_type) == bytes: query_type = query_type.decode('UTF-8')
+		if type(record) == bytes: record = record.decode('UTF-8')
+		if type(query_class) == bytes: query_class = query_class.decode('UTF-8')
+
+		self.CLIENT_IDENTITY = RAW_FRAME.CLIENT_IDENTITY
+		self.RAW_FRAME = RAW_FRAME
+		self.type = query_type
+		self.record = record
+		self.CLASS = query_class
+
+	@property
+	def bytes(self):
+		return dns.build_query_field(self)
+
+	def __repr__(self):
+		return f"<QUERY record={self.record}, type={self.type}>"
+
 class DNS_TCP_FRAME():
 	def __init__(self, CLIENT_IDENTITY):
 		self.CLIENT_IDENTITY = CLIENT_IDENTITY
+		self.FRAME_DATA = {}
 
 		# The struct just maps how many bytes (not bits) per section in a DNS header.
 		# A graphic overview can be found here: https://www.freesoft.org/CIE/RFC/1035/40.htm
@@ -499,107 +744,98 @@ class DNS_TCP_FRAME():
 	def parse(self):
 		# data, addr = self.socket.recvfrom(8192)
 
-		## Convert and slot the data into the binary map representation
+		self.remainer = b''
+		## given `dns_header_struct`, split the data up into the blocks defined there.
 		binary = list(byte_to_bin(self.CLIENT_IDENTITY.buffer, bin_map=self.dns_header_struct))
+		self.response = DNS_RESPONSE(self, header_length=sum(self.dns_header_struct))
 
-		## Convert the binary representation into the protocol map
-		headers = {}
+		## Take each block from `dns_header_struct` and use `dns_header_fields` to create a key: val pair of the two.
+		##    We'll split the data into binary, bytes and hex - as we need those different options for later
+		##    when we need to for instance create pointers, by merging the binary '11' + bin(target) later as an example.
 		for index in range(len(binary)):
-			headers[self.dns_header_fields[index]] = {'binary' : binary[index], 'bytes' : bin_str_to_byte(binary[index]), 'hex' : None}
-			headers[self.dns_header_fields[index]]['hex'] = bytes_to_hex(headers[self.dns_header_fields[index]]['bytes'])
+			self.FRAME_DATA[self.dns_header_fields[index]] = {'binary' : binary[index], 'bytes' : bin_str_to_byte(binary[index]), 'hex' : None}
+			self.FRAME_DATA[self.dns_header_fields[index]]['hex'] = bytes_to_hex(self.FRAME_DATA[self.dns_header_fields[index]]['bytes'])
 
-		if not len(headers["queries"]["bytes"]) == 2:
-			yield (Events.CLIENT_NO_QUERIES, None)
-			return
-			
-		headers["queries"]["value"] = struct.unpack(">H", headers["queries"]["bytes"])[0]
-		self.CLIENT_IDENTITY.server.log(f'[+] Got {headers["queries"]["value"]} queries from {self.CLIENT_IDENTITY}')
-
-		if headers["queries"]["value"] <= 0:
+		## If the query data section isn't exactly two bytes, we haven't gotten enough data to even begin parsing.
+		if not len(self.FRAME_DATA["queries"]["bytes"]) == 2:
 			yield (Events.CLIENT_NO_QUERIES, None)
 			return
 		
-		#for key, val in headers.items():
-		#	print(key, val)
-		for option, value in dns.parse_header_flags(headers["flags"]).items():
-			headers['flags'][option] = value
+		self.FRAME_DATA["queries"]["value"] = struct.unpack(">H", self.FRAME_DATA["queries"]["bytes"])[0]
+		self.CLIENT_IDENTITY.server.log(f'[+] Got {self.FRAME_DATA["queries"]["value"]} queries from {self.CLIENT_IDENTITY}')
 
-		if not headers['flags']['QR'] == 0 or 'data' not in headers:
+		if self.FRAME_DATA["queries"]["value"] <= 0:
+			yield (Events.CLIENT_NO_QUERIES, None)
+			return
+		
+		## Parse the frame header
+		for option, value in dns.parse_header_flags(self.FRAME_DATA["flags"]).items():
+			self.FRAME_DATA['flags'][option] = value
+
+		## if QR isn't 0, the client is trying something fishy.. or if the 'data' section is short/not there, there's no queries to parse.
+		## So we'll send an event up the chain.
+		if not self.FRAME_DATA['flags']['QR'] == 0 or 'data' not in self.FRAME_DATA:
 			self.CLIENT_IDENTITY.server.log(f'[-] Warning, Malformed data detected: {self.CLIENT_IDENTITY}')
+			yield (Events.CLIENT_INVALID_DATA, None)
 			return
 
-		dns_header_len = len(self.dns_header_struct)
-		pointers = {}
+		#pointers = {}
 
-		query_block = set()
-		answers = set()
-		additionals = set()
-		authorities = set()
+		#query_block = set()
+		#answers = set()
+		#additionals = set()
+		#authorities = set()
 
 		#print(self.CLIENT_IDENTITY.buffer)
-		#print(headers)
+		#print(self.FRAME_DATA)
 		try:
-			parsed_data_index, queries = dns.parse_queries(headers["queries"]["value"], headers["data"])
+			queries = dns.extract_queries(self)#self.FRAME_DATA["queries"]["value"], self.FRAME_DATA["data"])
 		except IncompleteFrame as e:
 			self.CLIENT_IDENTITY.server.log(f'[*] Warning, Malformed data detected from {self.CLIENT_IDENTITY}: {e}')
 			return
 
-		## First we point to the position in the query of the name we're resolving.
-		## (to avoid appending unessecary data)
-		# Pointers:
-		#  https://www.freesoft.org/CIE/RFC/1035/43.htm
-		#  https://osqa-ask.wireshark.org/questions/50806/help-understanding-dns-packet-data
-		for record in queries:
-			# 11XXXXXX in binary represents that there's a pointer here in the DNS world.
-			# And it has to be exactly 16 bits (2 bytes)
-			position = sum(self.dns_header_struct)+queries[record]['position']
-			pointers[queries[record]['record'].decode('UTF-8')] = {'position' : position, 'length' : position+queries[record]['length'], 'bytes' : struct.pack('>H', int('11' + bin(position)[2:].zfill(14), 2))}
-		
-		for index, query in enumerate(queries):
-			query_record = query.decode('UTF-8')
+		for index, query in enumerate(queries.values()):
+			if query.type and query.record in self.CLIENT_IDENTITY.server.database and query.type in self.CLIENT_IDENTITY.server.database[query.record]:
+				self.response += query # Add the query to the response (as it's the first block ouf of three (query, answer, additionals))
+				self.response += dns.build_answer_to_query(self, query, self.CLIENT_IDENTITY.server.database)
 
-			if queries[query]['type'] and query_record in self.CLIENT_IDENTITY.server.database and queries[query]['type'] in self.CLIENT_IDENTITY.server.database[query_record]:
-				query_block |= dns.build_query_field(queries[query])
-
-				if(result := dns.build_answer_field(queries[query], self.CLIENT_IDENTITY.server.database, pointers)):
-					answers |= result['answers']
-					additionals |= result['additionals']
-					self.CLIENT_IDENTITY.server.log(f"[ ] Query {index+1}: {query_record} -> {self.CLIENT_IDENTITY.server.database[query_record][queries[query]['type']]['ip']}")
-				else:
-					self.CLIENT_IDENTITY.server.log(f"[ ] While building answer for query {index+1} ({query_record}), dns.{queries[query]['type']} was detected as not implemented as a answer function.")
-			elif query_record not in self.CLIENT_IDENTITY.server.database:
-				self.CLIENT_IDENTITY.server.log(f'[-] DNS record {query_record} is not in database: {self.CLIENT_IDENTITY.server.database.keys()}')
-			elif queries[query]['type'] and not queries[query]['type'] in self.CLIENT_IDENTITY.server.database[query_record]:
-				self.CLIENT_IDENTITY.server.log(f"[-] DNS record {query_record} is missing a record for {queries[query]['type']} requests")
+				self.CLIENT_IDENTITY.server.log(f"[ ] Query {index+1}: {query.type}:{query.record} -> {self.CLIENT_IDENTITY.server.database[query.record][query.type]['target']}")
+			elif query.record not in self.CLIENT_IDENTITY.server.database:
+				self.CLIENT_IDENTITY.server.log(f'[-] DNS record {query.record} is not in database: {self.CLIENT_IDENTITY.server.database.keys()}')
+			elif query.type and not query.type in self.CLIENT_IDENTITY.server.database[query.record]:
+				self.CLIENT_IDENTITY.server.log(f"[-] DNS record {query.record} is missing a record for {query.type} requests")
 			else:
-				self.CLIENT_IDENTITY.server.log(f"[-] Record type {queries[query]['type']} is not implemented (While handling {query_record})")
+				self.CLIENT_IDENTITY.server.log(f"[-] Record type {query.type} is not implemented (While handling {query.record})")
 
-		if headers['additional_resource_records']:
-			# wireshark_match = '\\x'+'\\x'.join([hex(i)[2:].zfill(2) for i in headers["data"]['bytes'][parsed_data_index:]])
-			# print(wireshark_match)
-			additionals |= {headers['data']['bytes'][parsed_data_index:]}
+		if self.FRAME_DATA['additional_resource_records']:
+			self.response += ADDITIONAL(self, RAW_FIELD(self.remainer))
+		
+		#	# wireshark_match = '\\x'+'\\x'.join([hex(i)[2:].zfill(2) for i in self.FRAME_DATA["data"]['bytes'][parsed_data_index:]])
+		#	# print(wireshark_match)
+		#	self.response += ADDITIONAL(self.FRAME_DATA['data']['bytes'][parsed_data_index:])
 
-		response = headers['transaction_id']['bytes']
+		response = self.FRAME_DATA['transaction_id']['bytes']
 		response += b'\x85\x00' # Flags  b'\x81\x80'
-		response += struct.pack('>H', len(query_block)) # Queries
-		response += struct.pack('>H', len(answers))     # answer rrs
-		response += struct.pack('>H', len(authorities)) # authority rrs
-		response += struct.pack('>H', len(additionals))
-		response += b''.join(query_block)
-		response += b''.join(answers)
-		response += b''.join(additionals)
+		response += struct.pack('>H', len(self.response.queries))     # Queries
+		response += struct.pack('>H', len(self.response.answers))     # answer rrs
+		response += struct.pack('>H', len(self.response.authorities)) # authority rrs
+		response += struct.pack('>H', len(self.response.additionals)) # additional records
+		response += self.response.assemble.bytes
 
 		response = self.finalize_response(response)
 
 		#if len(answers) > 0:
 		#	self.socket.sendto(response, addr)
 
-		if len(answers) > 0:
+		if self.response > 0:
 			yield (Events.CLIENT_RESPONSE_DATA, response)
 
 class DNS_UDP_FRAME(DNS_TCP_FRAME):
+	## Larger UDP frames: "Permitting Larger DNS UDP Packets" @:
+	##   https://tools.ietf.org/html/draft-ietf-dnsind-udp-size-02
 	def __init__(self, CLIENT_IDENTITY):
 		self.CLIENT_IDENTITY = CLIENT_IDENTITY
+		self.FRAME_DATA = {}
 
 		# The struct just maps how many bytes (not bits) per section in a DNS header.
 		# A graphic overview can be found here: https://www.freesoft.org/CIE/RFC/1035/40.htm
