@@ -592,6 +592,14 @@ class DNS_RESPONSE():
 		return self
 
 	def __iadd__(self, obj):
+		"""
+		When doing `+=` on a `DNS_RESPONSE`, it will automatically attempt to detect
+		if the value being added is a :class:`~slimDNS.QUERY`, :class:`~slimDNS.ANSWER` or :class:`~slimDNS.ADDITIONAL`. And place the data in
+		the appropraite container. This makes for a smoother use case where the developer
+		can add anything in any order and any ammount of data without having to worry
+		where to place them. As long as the data type being added is one of the three,
+		either one by one or data in a `(list, tuple, set)`.
+		"""
 		if type(obj) in (list, tuple, set):
 			for item in obj:
 				self += item
@@ -767,15 +775,6 @@ class DNS_TCP_FRAME():
 			yield (Events.CLIENT_INVALID_DATA, None)
 			return
 
-		#pointers = {}
-
-		#query_block = set()
-		#answers = set()
-		#additionals = set()
-		#authorities = set()
-
-		#print(self.CLIENT_IDENTITY.buffer)
-		#print(self.FRAME_DATA)
 		try:
 			queries = dns.extract_queries(self)#self.FRAME_DATA["queries"]["value"], self.FRAME_DATA["data"])
 		except IncompleteFrame as e:
@@ -811,9 +810,6 @@ class DNS_TCP_FRAME():
 		response += self.response.assemble.bytes
 
 		response = self.finalize_response(response)
-
-		#if len(answers) > 0:
-		#	self.socket.sendto(response, addr)
 
 		if self.response > 0:
 			yield (Events.CLIENT_RESPONSE_DATA, response)
