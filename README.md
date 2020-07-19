@@ -4,7 +4,7 @@ A simple DNS server written in vanilla Python.
 
  * slimDNS [documentation](https://slimdns.readthedocs.io/en/latest/)
  * slimDNS [discord](https://discord.gg/CMjZbwR) server
- * slimDNS supports [A](https://slimdns.readthedocs.io/en/latest/record_types/A.html), [NS](https://slimdns.readthedocs.io/en/latest/record_types/NS.html), [SOA](https://slimdns.readthedocs.io/en/latest/record_types/SOA.html) and [SRV](https://slimdns.readthedocs.io/en/latest/record_types/SRV.html) records.
+ * slimDNS supports [A](https://slimdns.readthedocs.io/en/latest/record_types/A.html), [NS](https://slimdns.readthedocs.io/en/latest/record_types/NS.html), [SOA](https://slimdns.readthedocs.io/en/latest/record_types/SOA.html) and [SRV](https://slimdns.readthedocs.io/en/latest/record_types/SRV.html) records *(as of v1.0.0rc1)*.
 
 # Installation
 
