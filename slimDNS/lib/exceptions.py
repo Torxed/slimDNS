@@ -1,0 +1,2 @@
+class IncompleteFrame(BaseException):
+	pass

@@ -2,9 +2,16 @@
 
 A simple DNS server written in vanilla Python.
 
+ * slimHTTP [documentation](https://slimhttp.readthedocs.io/en/master)
+ * slimHTTP [discord](https://discord.gg/CMjZbwR) server
+
 # Installation
 
-git clone the repo, and create a `dns_server.py`:
+    pip install slimDNS
+
+or simply `git clone` this repository.
+
+## Minimal example
 
 ```py
 import slimDNS
@@ -14,57 +21,45 @@ dns = slimDNS.server(slimDNS.UDP)
 dns.run()
 ```
 
-# Configuration
+This would host a DNS server without any records.<br>
+There's two ways you can add records:
 
-Place a `records.json` in the working directory of the server root.<br>
-Basic syntax boils down to:<br>
-
-```json
-{
-	"domain.com" : {
-		"A" : {"ip" : "260.10.24.12", "type" : "A", "class" : "IN", "ttl" : 60},
-		"SOA" : {"ip" : "260.10.24.12", "type" : "SOA", "class" : "IN", "ttl" : 60},
-		"NS" : {"ip" : "260.10.24.12", "type" : "NS", "class" : "IN", "ttl" : 60, "priority" : 10, "port" : 8448, "target" : "domain.com"}
-	},
-	"nas.domain.com" : {
-		"A" : {"ip" : "260.10.24.12", "type" : "A", "class" : "IN", "ttl" : 60}
-	},
-	"_matrix._tcp.riot.domain.com" : {
-		"SRV" : {"ip" : "260.10.24.12", "type" : "SRV", "class" : "IN", "ttl" : 60, "priority" : 10, "port" : 8448, "target" : "nas.domain.com"}
-	}
-}
-```
-
-# All in one example
-
+Swap out all records via annotation
+-----------------------------------
 ```py
-import slimDNS
-
-dns = slimDNS.server(slimDNS.UDP)
-
 @dns.records
 def records(server):
 	return {
 		"example.com" : {
-			"A" : {"ip" : "264.30.198.2", "type" : "A", "class" : "IN", "ttl" : 60},
-			"SOA" : {"ip" : "264.30.198.2", "type" : "SOA", "class" : "IN", "ttl" : 60},
-			"NS" : {"ip" : "264.30.198.2", "type" : "NS", "class" : "IN", "ttl" : 60, "priority" : 10, "port" : 8448, "target" : "example.com"}
+			"A" : {"target" : "264.30.198.2", "ttl" : 60},
+			"SOA" : {"target" : "example.com", "ttl" : 60},
+			"NS" : {"target" : "example.com", "ttl" : 60, "priority" : 10}
 		},
 		"nas.example.com" : {
-			"A" : {"ip" : "264.30.198.2", "type" : "A", "class" : "IN", "ttl" : 60}
+			"A" : {"target" : "264.30.198.2", "type" : "A", "ttl" : 60}
 		},
 		"_matrix._tcp.riot.example.com" : {
-			"SRV" : {"ip" : "264.30.198.2", "type" : "SRV", "class" : "IN", "ttl" : 60, "priority" : 10, "port" : 8448, "target" : "nas.example.com"}
+			"SRV" : {"ttl" : 60, "priority" : 10, "port" : 8448, "target" : "nas.example.com"}
 		}
-	}
 
-dns.run()
+	}
 ```
 
-# Running
+Which would swap out all current records for the defined set of records.
 
-    $ sudo python dns_server.py
+Add, delete and update records
+------------------------------
+
+```py
+dns.remove('example.com', 'A')
+dns.add('example.com', 'A', '264.30.198.1')
+dns.update('example.com', 'A', '264.30.198.5')
+```
+
+Which would remove the `A` record `example.com`,<br>
+Then add a new similar one with a new UP and<br>
+finally update that new record with a new `IP`.
 
 # Note
 
-Requires Linux, Python 3.8+ and has not been tested outside the lab.
+Requires Python 3.8+ & ~Linux~ *(not tested on other platforms)*.
