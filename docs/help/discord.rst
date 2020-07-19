@@ -3,9 +3,9 @@
 Discord
 =======
 
-There's a discord channel which is frequent by the `contributors <https://github.com/Torxed/slimHTTP/graphs/contributors>`_.
+There's a discord channel which is frequent by the `contributors <https://github.com/Torxed/slimDNS/graphs/contributors>`_.
 
-To join the server, head over to `discord.com/slimHTTP <https://discord.gg/CMjZbwR>`_ and join in.
+To join the server, head over to `discord.com/slimDNS <https://discord.gg/CMjZbwR>`_ and join in.
 There's not many rules other than common sense and treat others with respect.
 
 There's the `@Party Animals` role if you want notifications of new releases which is posted in the `#Release Party` channel.

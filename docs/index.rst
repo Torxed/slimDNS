@@ -45,6 +45,15 @@ Some of the features of slimDNS are:
 
 .. toctree::
    :maxdepth: 3
+   :caption: Record types
+
+   record_types/A
+   record_types/NS
+   record_types/SOA
+   record_types/SRV
+
+.. toctree::
+   :maxdepth: 3
    :caption: API Reference
 
    slimDNS/server
