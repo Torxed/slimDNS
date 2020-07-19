@@ -62,7 +62,7 @@ class TCP_SERVER():
 		if type(db := f(self)) == dict:
 			self.database = db
 
-	def add(self, record, record_type, target, ttl=60, *, **kwargs):
+	def add(self, record, record_type, target, ttl=60, **kwargs):
 		if not record in self.database: self.database[record] = {}
 		self.database[record][record_type] = {'target' : target, 'ttl' : ttl, **kwargs}
 
@@ -76,7 +76,7 @@ class TCP_SERVER():
 
 		return True
 
-	def update(self, record, record_type, *, **kwargs):
+	def update(self, record, record_type, **kwargs):
 		if not record in self.database: return None
 		if not record_type in self.database[record]: return None
 

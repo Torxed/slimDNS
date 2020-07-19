@@ -32,12 +32,12 @@ def setup(app):
 
 # -- Project information -----------------------------------------------------
 
-project = 'slimHTTP'
+project = 'slimDNS'
 copyright = '2020, Anton Hvornum'
 author = 'Anton Hvornum'
 
 # The full version, including alpha/beta/rc tags
-release = 'v1.0-beta.002'
+release = 'v1.0.0rc1'
 
 
 # -- General configuration ---------------------------------------------------
@@ -69,7 +69,7 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 #html_theme = 'alabaster'
 html_theme = 'sphinx_rtd_theme'
 
-html_logo = "_static/slimHTTP.png"
+html_logo = "_static/slimDNS.png"
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
@@ -103,14 +103,14 @@ html_show_sourcelink = False
 #html_file_suffix = None
 
 # Output file base name for HTML help builder.
-htmlhelp_basename = 'slimhttpdoc'
+htmlhelp_basename = 'slimdnsdoc'
 
 # -- Options for manual page output --------------------------------------------
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
 man_pages = [
-    ('index', 'slimHTTP', u'slimHTTP Documentation',
+    ('index', 'slimDNS', u'slimDNS Documentation',
      [u'Anton Hvornum'], 1)
 ]
 
@@ -124,6 +124,6 @@ man_pages = [
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 texinfo_documents = [
-  ('index', 'slimHTTP', u'slimHTTP Documentation',
-   u'Anton Hvornum', 'slimHTTP', 'Simple and minimal HTTP server.'),
+  ('index', 'slimDNS', u'slimDNS Documentation',
+   u'Anton Hvornum', 'slimDNS', 'Simple and minimal HTTP server.'),
 ]
