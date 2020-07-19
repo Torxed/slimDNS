@@ -343,42 +343,30 @@ class dns(abc.ABCMeta):
 
 	@abc.abstractmethod
 	def SRV(frame, query, database):
-		srv_target = cache[record][query.type]['target']
+		srv_target = database[query.record][query.type]['target']
 
 		answer_data = b''.join(OrderedDict({
-			'priority' : struct.pack('>H', cache[record][query.type]['priority']),
+			'priority' : struct.pack('>H', database[query.record][query.type]['priority']),
 			'weight' : b'\x00\x00',
-			'port' : struct.pack('>H', cache[record][query.type]['port']),
+			'port' : struct.pack('>H', database[query.record][query.type]['port']),
 			'target' : dns.string(bytes(srv_target, 'UTF-8'))
 		}).values())
-		answer_frame = b''.join(OrderedDict({
-			'pointer' : pointers[query.record].bytes,
+		
+		return ANSWER(frame, {
+			'pointer' : dns.pointer(query.record),
 			'record_type' : struct.pack('>H', dns.record_type('SRV')),
 			'class' : struct.pack('>H', dns.record_class('IN')),
-			'ttl' : struct.pack('>I', cache[record][query.type]['ttl']),
+			'ttl' : struct.pack('>I', database[query.record][query.type]['ttl']),
 			'length' : struct.pack('>H', len(answer_data)),
 			'data' : answer_data
-		#   'priority' : struct.pack('>H', cache[record][query.type]['priority']),
-		#   'weight' : b'\x00\x00',
-		#   'port' : struct.pack('>H', cache[record][query.type]['port']),
-		#   'target' : dns.string(bytes(srv_target, 'UTF-8'))
-		}).values())
-
-		target_pointer_pos = pointers[query.record]['length'] + (len(answer_frame) - len(dns.string(bytes(srv_target, 'UTF-8'))))
-		pointers[srv_target] = dns.pointer(srv_target, target_pointer_pos, next_neightbour=target_pointer_pos+len(answer_frame))
-
-		additional_data = OrderedDict({
-			'pointer' : pointers[srv_target].bytes, # Figure this one out
+		}), ADDITIONAL(frame, {
+			'pointer' : dns.pointer(srv_target), # Figure this one out
 			'type' : struct.pack('>H', dns.record_type('A')),
 			'class' : struct.pack('>H', dns.record_class('in')),
 			'ttl' : struct.pack('>i', 60),
 			'length' : struct.pack('>H', 4),
-			'data' : ip_to_bytes(ipaddress.ip_address(cache[srv_target]['A']['target']))
+			'data' : ip_to_bytes(ipaddress.ip_address(database[srv_target]['A']['target']))
 		})
-
-		additional_data = b''.join(additional_data.values())
-
-		return {answer_frame}, {additional_data}
 
 	@abc.abstractmethod
 	def build_answer_to_query(frame, query, database):
