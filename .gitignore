@@ -1,3 +1,6 @@
 **/*__pycache__
 **/*config.py
 **/*.json
+**/**build
+**/**dist
+**/**egg-info
