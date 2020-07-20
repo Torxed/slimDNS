@@ -58,8 +58,8 @@ dns.update('example.com', 'A', '264.30.198.5')
 ```
 
 Which would remove the `A` record `example.com`,<br>
-Then add a new similar one with a new UP and<br>
-finally update that new record with a new `IP`.
+Then add a *new* similar one with a new `IP`.<br>
+Finally, update that new record with a new `IP`.
 
 # Note
 
