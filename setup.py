@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="slimDNS",
-    version="1.0.0rc1",
+    version="1.0.0rc2",
     author="Anton Hvornum",
     author_email="anton@hvornum.se",
     description="A simple DNS server written in vanilla Python.",
