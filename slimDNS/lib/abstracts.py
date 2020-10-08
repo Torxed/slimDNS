@@ -39,6 +39,7 @@ class dns(abc.ABCMeta):
 			'a' : 1,
 			'ns' : 2,
 			'soa' : 6,
+			'ptr' : 12,
 			'mx' : 15,
 			'txt' : 16,
 			'srv' : 33,
@@ -91,6 +92,7 @@ class dns(abc.ABCMeta):
 			1 : 'A',
 			2 : 'NS',
 			6 : 'SOA',
+			12 : 'PTR',
 			15 : 'MX',
 			16 : 'TXT',
 			33 : 'SRV',
@@ -200,7 +202,7 @@ class dns(abc.ABCMeta):
 		from .data import ANSWER, DNS_FIELDS
 
 		SOA_specifics = DNS_FIELDS({
-			'primary_server' : dns.pointer(database[query.record][query.type]['target']),
+			'primary_server' : dns.string(database[query.record][query.type]['target']), #dns.pointer(database[query.record][query.type]['target']),
 			'mailbox' : dns.email(f'root@{query.record}'),
 			'serial_number' : struct.pack('>i', 2020100801),
 			'refresh_interval' : struct.pack('>i', 360),
@@ -362,6 +364,13 @@ class dns(abc.ABCMeta):
 
 			'data' : SOA_specifics
 		}))
+
+	@abc.abstractmethod
+	def PTR(frame, query, database):
+		from .data import NONE_ANSWER
+
+		frame.response.flags = b'\x81\x05'
+		return NONE_ANSWER(None, None)
 
 	@abc.abstractmethod
 	def build_answer_to_query(frame, query, database):

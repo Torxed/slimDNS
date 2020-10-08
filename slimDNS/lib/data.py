@@ -203,10 +203,15 @@ class QUERIES(BLOCK):
 	def __repr__(self):
 		return f"<QUERIES BLOCK({len(self.data)})>"
 
+class NONE_ANSWER(BLOCK):
+	def __repr__(self):
+		return f"<NONE_ANSWER>"
+
 class DNS_RESPONSE():
 	def __init__(self, DNS_FRAME, header_length):
 		self.DNS_FRAME = DNS_FRAME
 		self.header_length = header_length
+		self.flags = b'\x85\x00' # Flags  b'\x81\x80'
 		self._queries = QUERIES(self.DNS_FRAME)
 		self._answers = ANSWERS(self.DNS_FRAME, self.queries)
 		self._authorities = set()
@@ -242,6 +247,8 @@ class DNS_RESPONSE():
 			self._answers += obj
 		elif type(obj) == ADDITIONAL:
 			self._additionals += obj
+		elif type(obj) == NONE_ANSWER:
+			pass # A non-response
 		else:
 			raise ValueError(f'Unknown type trying to be added to {self}: {obj} ({type(obj)})')
 		
@@ -349,14 +356,15 @@ class DNS_TCP_FRAME():
 				self.CLIENT_IDENTITY.server.log(f"[-] Record type {query.type} is not implemented (While handling {query.record})")
 
 		if self.FRAME_DATA['additional_resource_records']:
-			self.response += ADDITIONAL(self, RAW_FIELD(self.remainer))
+			print("There's additional resource records for this query. Appending!")
+			#self.response += ADDITIONAL(self, RAW_FIELD(self.remainer))
 		
 		#	# wireshark_match = '\\x'+'\\x'.join([hex(i)[2:].zfill(2) for i in self.FRAME_DATA["data"]['bytes'][parsed_data_index:]])
 		#	# print(wireshark_match)
 		#	self.response += ADDITIONAL(self.FRAME_DATA['data']['bytes'][parsed_data_index:])
 
 		response = self.FRAME_DATA['transaction_id']['bytes']
-		response += b'\x85\x00' # Flags  b'\x81\x80'
+		response += self.response.flags
 		response += struct.pack('>H', len(self.response.queries))     # Queries
 		response += struct.pack('>H', len(self.response.answers))     # answer rrs
 		response += struct.pack('>H', len(self.response.authorities)) # authority rrs
@@ -365,7 +373,7 @@ class DNS_TCP_FRAME():
 
 		response = self.finalize_response(response)
 
-		if self.response > 0:
+		if self.response > 0 or self.response.flags == b'\x81\x05': # TODO: Ugly hack of checking if the flag "Reply code: refused" is set, which causes an empty response and should be sent anyway.
 			yield (Events.CLIENT_RESPONSE_DATA, response)
 
 class DNS_UDP_FRAME(DNS_TCP_FRAME):
