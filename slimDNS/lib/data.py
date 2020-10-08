@@ -340,7 +340,7 @@ class DNS_TCP_FRAME():
 				self.response += query # Add the query to the response (as it's the first block ouf of three (query, answer, additionals))
 				self.response += dns.build_answer_to_query(self, query, self.CLIENT_IDENTITY.server.database)
 
-				self.CLIENT_IDENTITY.server.log(f"[ ] Query {index+1}: {query.type}:{query.record} -> {self.CLIENT_IDENTITY.server.database[query.record][query.type]['target']}")
+				self.CLIENT_IDENTITY.server.log(f"[ ] Query {index+1}: {query.type}:{query.record} -> {self.CLIENT_IDENTITY.server.database[query.record][query.type]}")
 			elif query.record not in self.CLIENT_IDENTITY.server.database:
 				self.CLIENT_IDENTITY.server.log(f'[-] DNS record {query.record} is not in database: {self.CLIENT_IDENTITY.server.database.keys()}')
 			elif query.type and not query.type in self.CLIENT_IDENTITY.server.database[query.record]:
