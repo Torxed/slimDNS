@@ -43,6 +43,7 @@ class dns(abc.ABCMeta):
 			'mx' : 15,
 			'txt' : 16,
 			'srv' : 33,
+			'opt' : 41,
 			'spf' : 99
 		}
 		if not t.lower() in types: return None
@@ -96,6 +97,7 @@ class dns(abc.ABCMeta):
 			15 : 'MX',
 			16 : 'TXT',
 			33 : 'SRV',
+			41 : 'OPT',
 			99 : 'SPF'
 		}
 		if not i in types:
@@ -153,6 +155,15 @@ class dns(abc.ABCMeta):
 		return record + struct.pack('>H', dns.record_type(query.type)) + b'\x00\x01'
 
 	@abc.abstractmethod
+	def translate(frame, query, target):
+		from .data import QUERY
+
+		if QUERY(frame, query.type, query.record) in frame.response.queries:
+			return dns.pointer(target)
+		else:
+			return dns.string(target)
+
+	@abc.abstractmethod
 	def A(frame, query, database):
 		"""
 		A helper function to build a DNS "A" record.
@@ -202,7 +213,7 @@ class dns(abc.ABCMeta):
 		from .data import ANSWER, DNS_FIELDS
 
 		SOA_specifics = DNS_FIELDS({
-			'primary_server' : dns.string(database[query.record][query.type]['target']), #dns.pointer(database[query.record][query.type]['target']),
+			'primary_server' : dns.string(database[query.record][query.type]['target']), #dns.translate(frame, query, database[query.record][query.type]['target']),
 			'mailbox' : dns.email(f'root@{query.record}'),
 			'serial_number' : struct.pack('>i', 2020100801),
 			'refresh_interval' : struct.pack('>i', 360),
@@ -371,6 +382,47 @@ class dns(abc.ABCMeta):
 
 		frame.response.flags = b'\x81\x05'
 		return NONE_ANSWER(None, None)
+
+	@abc.abstractmethod
+	def OPT(frame, query, database):
+		from .data import ADDITIONAL, DNS_FIELDS
+
+		"""
+		The OPT field is added to the additional section.
+		But only if support for certain things are available, like EDNS.
+
+		RDATA:
+		   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+		0: |                          OPTION-CODE                          |
+		   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+		2: |                         OPTION-LENGTH                         |
+		   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+		4: |                                                               |
+		   /                          OPTION-DATA                          /
+		   /                                                               /
+		   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+		"""
+
+# Cookie data:
+#		OPTION_DATA = b'\x26\x7f\x84\xb9\x0a\x66\x3e\x4f'
+
+#		RDATA = DNS_FIELDS({
+#			'option code' : struct.pack('>H', 10), # Cookie
+#			'option length' : struct.pack('>H', len(OPTION_DATA))
+#			'option data' : OPTION_DATA
+#		})
+		RDATA = b''
+
+		return ADDITIONAL(frame, DNS_FIELDS({
+				'name' : struct.pack('B', 0), # Always zero, meaning "root"
+				'type' : struct.pack('>H', dns.record_type('OPT')),
+				'UDP payload size' : struct.pack('>H', 4096), # 8192?
+				'RCODE' : struct.pack('B', 0),
+				'EDNS0 version' : struct.pack('B', 0),
+				'DO bit' : struct.pack('>H', 0), # First bit in the two bytes = DO bit, 0 DO bit = no DNSSEC, reset is reserved
+				'Data Length' : struct.pack('>H', len(RDATA)),
+				#'RDATA' : RDATA
+			}))
 
 	@abc.abstractmethod
 	def build_answer_to_query(frame, query, database):

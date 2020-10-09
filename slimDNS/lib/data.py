@@ -139,6 +139,12 @@ class BLOCK():
 		"""
 		return self
 
+	def __contains__(self, item):
+		for data_object in self.data:
+			if type(item) == type(data_object) and item.record == data_object.record and item.type == data_object.type:
+				return True
+		return False
+
 	def build(self, previous_block):
 		build = b''
 		for part in self.data:
@@ -293,6 +299,7 @@ class DNS_TCP_FRAME():
 			'additional_resource_records',
 			'data'
 		]
+		self.header_length = sum(self.dns_header_struct)-2 # Offsets are counted from the Transaction ID, and does not include the 2 bytes of "Length"
 
 	def finalize_response(self, response):
 		return struct.pack('>H', len(response)) + response
@@ -304,7 +311,7 @@ class DNS_TCP_FRAME():
 		self.remainer = b''
 		## given `dns_header_struct`, split the data up into the blocks defined there.
 		binary = list(byte_to_bin(self.CLIENT_IDENTITY.buffer, bin_map=self.dns_header_struct))
-		self.response = DNS_RESPONSE(self, header_length=sum(self.dns_header_struct))
+		self.response = DNS_RESPONSE(self, header_length=self.header_length)
 
 		## Take each block from `dns_header_struct` and use `dns_header_fields` to create a key: val pair of the two.
 		##    We'll split the data into binary, bytes and hex - as we need those different options for later
@@ -356,8 +363,9 @@ class DNS_TCP_FRAME():
 				self.CLIENT_IDENTITY.server.log(f"[-] Record type {query.type} is not implemented (While handling {query.record})")
 
 		if self.FRAME_DATA['additional_resource_records']:
-			print("There's additional resource records for this query. Appending!")
-			#self.response += ADDITIONAL(self, RAW_FIELD(self.remainer))
+			self.response += dns.OPT(self, query, self.CLIENT_IDENTITY.server.database)
+		#	print("There's additional resource records for this query. Appending!")
+		#	self.response += ADDITIONAL(self, RAW_FIELD(self.remainer))
 		
 		#	# wireshark_match = '\\x'+'\\x'.join([hex(i)[2:].zfill(2) for i in self.FRAME_DATA["data"]['bytes'][parsed_data_index:]])
 		#	# print(wireshark_match)
@@ -396,6 +404,7 @@ class DNS_UDP_FRAME(DNS_TCP_FRAME):
 			'additional_resource_records',
 			'data'
 		]
+		self.header_length = sum(self.dns_header_struct)
 
 	def finalize_response(self, response):
 		# UDP doesn't require any additional lengths etc.
