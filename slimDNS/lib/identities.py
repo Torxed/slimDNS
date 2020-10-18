@@ -30,12 +30,16 @@ class DNS_TCP_CLIENT_IDENTITY():
 			self.buffer += d
 			yield (Events.CLIENT_DATA, len(self.buffer))
 
-			for event, data in DNS_TCP_FRAME(self).parse():
-				yield (event, data)
+			try:
+				for event, data in DNS_TCP_FRAME(self).parse():
+					yield (event, data)
 
-				if event in Events.DATA_EVENTS:
-					self.socket.send(data)
-					self.socket.close()
+					if event in Events.DATA_EVENTS:
+						self.socket.send(data)
+			except Exception as e:
+				print(f'[!] Critical error in parsing {self.address} data: {e}')
+			
+			self.socket.close()
 
 class DNS_UDP_CLIENT_IDENTITY():
 	def __init__(self, server):
