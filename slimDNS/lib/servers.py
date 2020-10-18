@@ -104,7 +104,7 @@ class TCP_SERVER():
 		self.socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
 		self.socket.bind((self.config['addr'], self.config['port']))
 		self.socket.listen(10)
-		print(f'[+] Bound TCP to {self.config['addr']}:{self.config['port']}')
+		print(f"[+] Bound TCP to {self.config['addr']}:{self.config['port']}")
 
 	def default_config(self):
 		"""
