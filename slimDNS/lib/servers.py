@@ -104,6 +104,7 @@ class TCP_SERVER():
 		self.socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
 		self.socket.bind((self.config['addr'], self.config['port']))
 		self.socket.listen(10)
+		print(f'[+] Bound TCP to {self.config['addr']}:{self.config['port']}')
 
 	def default_config(self):
 		"""
@@ -153,6 +154,7 @@ class UDP_SERVER(TCP_SERVER):
 		## https://www.freepascal.org/docs-html/current/rtl/sockets/index-2.html
 		self.socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
 		self.socket.bind((self.config['addr'], self.config['port']))
+		print(f'[+] Bound to UDP {self.config['addr']}:{self.config['port']}')
 
 	def poll(self, timeout=0.001):#, fileno=None):
 		# d = dict(self.pollobj.poll(timeout))

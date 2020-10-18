@@ -1,6 +1,8 @@
 import abc, struct, ipaddress
 from collections import OrderedDict
 
+from .exceptions import *
+
 class dns(abc.ABCMeta):
 	"""
 	dns is a abstract class, meant to make it easier to build individual components of DNS frames.
@@ -37,7 +39,12 @@ class dns(abc.ABCMeta):
 			'a' : 1,
 			'ns' : 2,
 			'soa' : 6,
-			'srv' : 33
+			'ptr' : 12,
+			'mx' : 15,
+			'txt' : 16,
+			'srv' : 33,
+			'opt' : 41,
+			'spf' : 99
 		}
 		if not t.lower() in types: return None
 		return types[t.lower()]
@@ -86,9 +93,16 @@ class dns(abc.ABCMeta):
 			1 : 'A',
 			2 : 'NS',
 			6 : 'SOA',
-			33 : 'SRV'
+			12 : 'PTR',
+			15 : 'MX',
+			16 : 'TXT',
+			33 : 'SRV',
+			41 : 'OPT',
+			99 : 'SPF'
 		}
-		if not i in types: return None
+		if not i in types:
+			print(f'[!] Unknown record query type: {i}')
+			return None
 		return types[i]
 
 	@abc.abstractmethod
@@ -141,6 +155,15 @@ class dns(abc.ABCMeta):
 		return record + struct.pack('>H', dns.record_type(query.type)) + b'\x00\x01'
 
 	@abc.abstractmethod
+	def translate(frame, query, target):
+		from .data import QUERY
+
+		if QUERY(frame, query.type, query.record) in frame.response.queries:
+			return dns.pointer(target)
+		else:
+			return dns.string(target)
+
+	@abc.abstractmethod
 	def A(frame, query, database):
 		"""
 		A helper function to build a DNS "A" record.
@@ -190,9 +213,9 @@ class dns(abc.ABCMeta):
 		from .data import ANSWER, DNS_FIELDS
 
 		SOA_specifics = DNS_FIELDS({
-			'primary_server' : dns.pointer(database[query.record][query.type]['target']),
+			'primary_server' : dns.string(database[query.record][query.type]['target']), #dns.translate(frame, query, database[query.record][query.type]['target']),
 			'mailbox' : dns.email(f'root@{query.record}'),
-			'serial_number' : struct.pack('>i', 1),
+			'serial_number' : struct.pack('>i', 2020100801),
 			'refresh_interval' : struct.pack('>i', 360),
 			'retry_interval' : struct.pack('>i', 360),
 			'expire_limit' : struct.pack('>i', 360),
@@ -211,31 +234,73 @@ class dns(abc.ABCMeta):
 		}))
 
 	@abc.abstractmethod
+	def MX(frame, query, database):
+		from .data import ANSWER, DNS_FIELDS
+
+		# First, wrap single-targets into a list
+		# So that we can handle list objects (if multiple records are allowed)
+		# TODO: Perhaps move this check into earlier stages?
+		mx_servers = database[query.record][query.type]
+		if not type(mx_servers) in (list, tuple):
+			mx_servers = [mx_servers]
+
+		answer_frame = []
+		for mx_target in mx_servers:
+
+
+			MX_specifics = DNS_FIELDS({
+				'preference' : struct.pack('>H', mx_target['priority']),
+				'mail_exchange' : dns.string(mx_target['target']),
+			})
+
+			answer_frame.append(ANSWER(frame, DNS_FIELDS({
+				'domain_name' : dns.pointer(query.record),
+
+				'record_type' : struct.pack('>H', dns.record_type('MX')),
+				'class' : struct.pack('>H', dns.record_class('IN')),
+				'ttl' : struct.pack('>I', mx_target['ttl']),
+				'length' : struct.pack('>H', len(MX_specifics)),
+
+				'data' : MX_specifics
+			})))
+
+		return answer_frame
+
+	@abc.abstractmethod
 	def NS(frame, query, database):
 		from .data import ANSWER, ADDITIONAL
 		from .utilities import ip_to_bytes
 
-		ns_target = database[query.record][query.type]['target']
+		# First, wrap single-targets into a list
+		# So that we can handle list objects (if multiple records are allowed)
+		# TODO: Perhaps move this check into earlier stages?
+		ns_servers = database[query.record][query.type]
+		if not type(ns_servers) in (list, tuple):
+			ns_servers = [ns_servers]
 
-		answer_frame = ANSWER(frame, {
-			'pointer' : dns.pointer(query.record),
-			'record_type' : struct.pack('>H', dns.record_type('NS')),
-			'class' : struct.pack('>H', dns.record_class('IN')),
-			'ttl' : struct.pack('>I', database[query.record][query.type]['ttl']),
-			'length' : struct.pack('>H', len(dns.string(ns_target))),
-			'name_server' : dns.string(ns_target)
-		})
+		answer_frame = []
+		additional_data = []
 
-		additional_data = ADDITIONAL(frame, {
-			'pointer' : dns.pointer(ns_target), # Pointers gets resolved at build time, and can be safely stored as a standalone record.
-			'type' : struct.pack('>H', dns.record_type('A')),
-			'class' : struct.pack('>H', dns.record_class('in')),
-			'ttl' : struct.pack('>i', 60),
-			'length' : struct.pack('>H', 4),
-			'data' : ip_to_bytes(ipaddress.ip_address(database[ns_target]['A']['target']))
-		})
+		for ns_target in ns_servers:
+			answer_frame.append(ANSWER(frame, {
+				'pointer' : dns.pointer(query.record),
+				'record_type' : struct.pack('>H', dns.record_type('NS')),
+				'class' : struct.pack('>H', dns.record_class('IN')),
+				'ttl' : struct.pack('>I', ns_target['ttl']),
+				'length' : struct.pack('>H', len(dns.string(ns_target['target']))),
+				'name_server' : dns.string(ns_target['target'])
+			}))
 
-		return answer_frame, additional_data
+			additional_data.append(ADDITIONAL(frame, {
+				'pointer' : dns.pointer(ns_target['target']), # Pointers gets resolved at build time, and can be safely stored as a standalone record.
+				'type' : struct.pack('>H', dns.record_type('A')),
+				'class' : struct.pack('>H', dns.record_class('in')),
+				'ttl' : struct.pack('>i', 60),
+				'length' : struct.pack('>H', 4),
+				'data' : ip_to_bytes(ipaddress.ip_address(database[ns_target['target']]['A']['target']))
+			}))
+
+		return [*answer_frame, *additional_data]
 
 	@abc.abstractmethod
 	def SRV(frame, query, database):
@@ -266,6 +331,98 @@ class dns(abc.ABCMeta):
 			'length' : struct.pack('>H', 4),
 			'data' : ip_to_bytes(ipaddress.ip_address(database[srv_target]['A']['target']))
 		})
+
+	@abc.abstractmethod
+	def TXT(frame, query, database):
+		from .data import ANSWER, DNS_FIELDS
+
+		MX_specifics = DNS_FIELDS({
+			'txt_content' : dns.string(database[query.record][query.type]['target']),
+		})
+
+		return ANSWER(frame, DNS_FIELDS({
+			'domain_name' : dns.pointer(query.record),
+
+			'record_type' : struct.pack('>H', dns.record_type('TXT')),
+			'class' : struct.pack('>H', dns.record_class('IN')),
+			'ttl' : struct.pack('>I', database[query.record][query.type]['ttl']),
+			'length' : struct.pack('>H', len(MX_specifics)),
+
+			'data' : MX_specifics
+		}))
+
+	@abc.abstractmethod
+	def SPF(frame, query, database):
+		from .data import ANSWER, DNS_FIELDS
+
+		SOA_specifics = DNS_FIELDS({
+			'primary_server' : dns.pointer(database[query.record][query.type]['target']),
+			'mailbox' : dns.email(f'root@{query.record}'),
+			'serial_number' : struct.pack('>i', 2020100801),
+			'refresh_interval' : struct.pack('>i', 360),
+			'retry_interval' : struct.pack('>i', 360),
+			'expire_limit' : struct.pack('>i', 360),
+			'ninimum_ttl' : struct.pack('>i', 360)
+		})
+
+		return ANSWER(frame, DNS_FIELDS({
+			'domain_name' : dns.pointer(query.record),
+
+			'record_type' : struct.pack('>H', dns.record_type('SOA')),
+			'class' : struct.pack('>H', dns.record_class('IN')),
+			'ttl' : struct.pack('>I', database[query.record][query.type]['ttl']),
+			'length' : struct.pack('>H', len(SOA_specifics)),
+
+			'data' : SOA_specifics
+		}))
+
+	@abc.abstractmethod
+	def PTR(frame, query, database):
+		from .data import NONE_ANSWER
+
+		frame.response.flags = b'\x81\x05'
+		return NONE_ANSWER(None, None)
+
+	@abc.abstractmethod
+	def OPT(frame, query, database):
+		from .data import ADDITIONAL, DNS_FIELDS
+
+		"""
+		The OPT field is added to the additional section.
+		But only if support for certain things are available, like EDNS.
+
+		RDATA:
+		   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+		0: |                          OPTION-CODE                          |
+		   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+		2: |                         OPTION-LENGTH                         |
+		   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+		4: |                                                               |
+		   /                          OPTION-DATA                          /
+		   /                                                               /
+		   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+		"""
+
+# Cookie data:
+#		OPTION_DATA = b'\x26\x7f\x84\xb9\x0a\x66\x3e\x4f'
+
+#		RDATA = DNS_FIELDS({
+#			'option code' : struct.pack('>H', 10), # Cookie
+#			'option length' : struct.pack('>H', len(OPTION_DATA))
+#			'option data' : OPTION_DATA
+#		})
+		RDATA = b''
+
+		return ADDITIONAL(frame, DNS_FIELDS({
+				'name' : struct.pack('B', 0), # Always zero, meaning "root"
+				'type' : struct.pack('>H', dns.record_type('OPT')),
+				'UDP payload size' : struct.pack('>H', 4096), # 8192?
+				'RCODE' : struct.pack('B', 0),
+				'EDNS0 version' : struct.pack('B', 0),
+				'DO bit' : struct.pack('>H', 0), # First bit in the two bytes = DO bit, 0 DO bit = no DNSSEC, reset is reserved
+				'Data Length' : struct.pack('>H', len(RDATA)),
+				#'RDATA' : RDATA
+			}))
 
 	@abc.abstractmethod
 	def build_answer_to_query(frame, query, database):

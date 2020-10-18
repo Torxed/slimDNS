@@ -139,6 +139,12 @@ class BLOCK():
 		"""
 		return self
 
+	def __contains__(self, item):
+		for data_object in self.data:
+			if type(item) == type(data_object) and item.record == data_object.record and item.type == data_object.type:
+				return True
+		return False
+
 	def build(self, previous_block):
 		build = b''
 		for part in self.data:
@@ -203,10 +209,15 @@ class QUERIES(BLOCK):
 	def __repr__(self):
 		return f"<QUERIES BLOCK({len(self.data)})>"
 
+class NONE_ANSWER(BLOCK):
+	def __repr__(self):
+		return f"<NONE_ANSWER>"
+
 class DNS_RESPONSE():
 	def __init__(self, DNS_FRAME, header_length):
 		self.DNS_FRAME = DNS_FRAME
 		self.header_length = header_length
+		self.flags = b'\x85\x00' # Flags  b'\x81\x80'
 		self._queries = QUERIES(self.DNS_FRAME)
 		self._answers = ANSWERS(self.DNS_FRAME, self.queries)
 		self._authorities = set()
@@ -242,6 +253,8 @@ class DNS_RESPONSE():
 			self._answers += obj
 		elif type(obj) == ADDITIONAL:
 			self._additionals += obj
+		elif type(obj) == NONE_ANSWER:
+			pass # A non-response
 		else:
 			raise ValueError(f'Unknown type trying to be added to {self}: {obj} ({type(obj)})')
 		
@@ -286,6 +299,7 @@ class DNS_TCP_FRAME():
 			'additional_resource_records',
 			'data'
 		]
+		self.header_length = sum(self.dns_header_struct)-2 # Offsets are counted from the Transaction ID, and does not include the 2 bytes of "Length"
 
 	def finalize_response(self, response):
 		return struct.pack('>H', len(response)) + response
@@ -297,7 +311,7 @@ class DNS_TCP_FRAME():
 		self.remainer = b''
 		## given `dns_header_struct`, split the data up into the blocks defined there.
 		binary = list(byte_to_bin(self.CLIENT_IDENTITY.buffer, bin_map=self.dns_header_struct))
-		self.response = DNS_RESPONSE(self, header_length=sum(self.dns_header_struct))
+		self.response = DNS_RESPONSE(self, header_length=self.header_length)
 
 		## Take each block from `dns_header_struct` and use `dns_header_fields` to create a key: val pair of the two.
 		##    We'll split the data into binary, bytes and hex - as we need those different options for later
@@ -340,7 +354,7 @@ class DNS_TCP_FRAME():
 				self.response += query # Add the query to the response (as it's the first block ouf of three (query, answer, additionals))
 				self.response += dns.build_answer_to_query(self, query, self.CLIENT_IDENTITY.server.database)
 
-				self.CLIENT_IDENTITY.server.log(f"[ ] Query {index+1}: {query.type}:{query.record} -> {self.CLIENT_IDENTITY.server.database[query.record][query.type]['target']}")
+				self.CLIENT_IDENTITY.server.log(f"[ ] Query {index+1}: {query.type}:{query.record} -> {self.CLIENT_IDENTITY.server.database[query.record][query.type]}")
 			elif query.record not in self.CLIENT_IDENTITY.server.database:
 				self.CLIENT_IDENTITY.server.log(f'[-] DNS record {query.record} is not in database: {self.CLIENT_IDENTITY.server.database.keys()}')
 			elif query.type and not query.type in self.CLIENT_IDENTITY.server.database[query.record]:
@@ -349,14 +363,16 @@ class DNS_TCP_FRAME():
 				self.CLIENT_IDENTITY.server.log(f"[-] Record type {query.type} is not implemented (While handling {query.record})")
 
 		if self.FRAME_DATA['additional_resource_records']:
-			self.response += ADDITIONAL(self, RAW_FIELD(self.remainer))
+			self.response += dns.OPT(self, query, self.CLIENT_IDENTITY.server.database)
+		#	print("There's additional resource records for this query. Appending!")
+		#	self.response += ADDITIONAL(self, RAW_FIELD(self.remainer))
 		
 		#	# wireshark_match = '\\x'+'\\x'.join([hex(i)[2:].zfill(2) for i in self.FRAME_DATA["data"]['bytes'][parsed_data_index:]])
 		#	# print(wireshark_match)
 		#	self.response += ADDITIONAL(self.FRAME_DATA['data']['bytes'][parsed_data_index:])
 
 		response = self.FRAME_DATA['transaction_id']['bytes']
-		response += b'\x85\x00' # Flags  b'\x81\x80'
+		response += self.response.flags
 		response += struct.pack('>H', len(self.response.queries))     # Queries
 		response += struct.pack('>H', len(self.response.answers))     # answer rrs
 		response += struct.pack('>H', len(self.response.authorities)) # authority rrs
@@ -365,7 +381,7 @@ class DNS_TCP_FRAME():
 
 		response = self.finalize_response(response)
 
-		if self.response > 0:
+		if self.response > 0 or self.response.flags == b'\x81\x05': # TODO: Ugly hack of checking if the flag "Reply code: refused" is set, which causes an empty response and should be sent anyway.
 			yield (Events.CLIENT_RESPONSE_DATA, response)
 
 class DNS_UDP_FRAME(DNS_TCP_FRAME):
@@ -388,6 +404,7 @@ class DNS_UDP_FRAME(DNS_TCP_FRAME):
 			'additional_resource_records',
 			'data'
 		]
+		self.header_length = sum(self.dns_header_struct)
 
 	def finalize_response(self, response):
 		# UDP doesn't require any additional lengths etc.
