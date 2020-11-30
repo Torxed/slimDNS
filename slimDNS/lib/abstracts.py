@@ -42,9 +42,11 @@ class dns(abc.ABCMeta):
 			'ptr' : 12,
 			'mx' : 15,
 			'txt' : 16,
+			'aaaa' : 28,
 			'srv' : 33,
 			'opt' : 41,
-			'spf' : 99
+			'spf' : 99,
+			'caa' : 257
 		}
 		if not t.lower() in types: return None
 		return types[t.lower()]
@@ -96,12 +98,15 @@ class dns(abc.ABCMeta):
 			12 : 'PTR',
 			15 : 'MX',
 			16 : 'TXT',
+			28 : 'AAAA',
 			33 : 'SRV',
 			41 : 'OPT',
-			99 : 'SPF'
+			99 : 'SPF',
+			257 : 'CAA'
 		}
-		if not i in types:
-			print(f'[!] Unknown record query type: {i}')
+		if not i or i not in types:
+			if i:
+				print(f'[!] Unknown record query type: {i}')
 			return None
 		return types[i]
 
@@ -149,7 +154,7 @@ class dns(abc.ABCMeta):
 		:return: Returns a data `set` of the record
 		:rtype: set
 		"""
-		record = dns.string(query.record)
+		record = dns.string(query.record.lower())
 
 		#      record | type | class
 		return record + struct.pack('>H', dns.record_type(query.type)) + b'\x00\x01'
@@ -158,10 +163,17 @@ class dns(abc.ABCMeta):
 	def translate(frame, query, target):
 		from .data import QUERY
 
-		if QUERY(frame, query.type, query.record) in frame.response.queries:
+		if QUERY(frame, query.type, query.record.lower()) in frame.response.queries:
 			return dns.pointer(target)
 		else:
 			return dns.string(target)
+
+	@abc.abstractmethod
+	def AAAA(frame, query, database):
+		from .data import NONE_ANSWER
+
+		frame.response.flags = b'\x81\x05'
+		return NONE_ANSWER(None, None)
 
 	@abc.abstractmethod
 	def A(frame, query, database):
@@ -196,13 +208,13 @@ class dns(abc.ABCMeta):
 		from .data import ANSWER, DNS_FIELDS
 		from .utilities import ip_to_bytes
 
-		ip = ip_to_bytes(ipaddress.ip_address(database[query.record][query.type]['target']))
+		ip = ip_to_bytes(ipaddress.ip_address(database[query.record.lower()][query.type]['target']))
 
 		return ANSWER(frame, DNS_FIELDS({
-			'record_name' : dns.pointer(query.record),
+			'record_name' : dns.pointer(query.record.lower()),
 			'record_type' : struct.pack('>H', dns.record_type('A')),
 			'class' : struct.pack('>H', dns.record_class('IN')),
-			'ttl' : struct.pack('>I', database[query.record][query.type]['ttl']),
+			'ttl' : struct.pack('>I', database[query.record.lower()][query.type]['ttl']),
 			'length' : struct.pack('>H', len(ip)),
 
 			'data' : ip
@@ -213,8 +225,8 @@ class dns(abc.ABCMeta):
 		from .data import ANSWER, DNS_FIELDS
 
 		SOA_specifics = DNS_FIELDS({
-			'primary_server' : dns.string(database[query.record][query.type]['target']), #dns.translate(frame, query, database[query.record][query.type]['target']),
-			'mailbox' : dns.email(f'root@{query.record}'),
+			'primary_server' : dns.string(database[query.record.lower()][query.type]['target']), #dns.translate(frame, query, database[query.record.lower()][query.type]['target']),
+			'mailbox' : dns.email(f'root@{query.record.lower()}'),
 			'serial_number' : struct.pack('>i', 2020100801),
 			'refresh_interval' : struct.pack('>i', 360),
 			'retry_interval' : struct.pack('>i', 360),
@@ -223,14 +235,44 @@ class dns(abc.ABCMeta):
 		})
 
 		return ANSWER(frame, DNS_FIELDS({
+			'domain_name' : dns.pointer(query.record.lower()),
+
+			'record_type' : struct.pack('>H', dns.record_type('SOA')),
+			'class' : struct.pack('>H', dns.record_class('IN')),
+			'ttl' : struct.pack('>I', database[query.record.lower()][query.type]['ttl']),
+			'length' : struct.pack('>H', len(SOA_specifics)),
+
+			'data' : SOA_specifics
+		}))
+
+	@abc.abstractmethod
+	def CAA(frame, query, database):
+		from .data import AUTHORITY, DNS_FIELDS
+
+		server = dns.pointer(query.record)
+		if query.record.lower() != database[query.record.lower()]['CAA']['target']:
+			server = dns.string(database[query.record.lower()]['CAA']['target'])
+
+		CAA_SPECIFICS = DNS_FIELDS({
+			'primary_server' : server,
+			'mailbox' : dns.email(f'root@{query.record.lower()}'),
+			'serial_number' : struct.pack('>i', 2020100801),
+			'refresh_interval' : struct.pack('>i', 360),
+			'retry_interval' : struct.pack('>i', 360),
+			'expire_limit' : struct.pack('>i', 360),
+			'ninimum_ttl' : struct.pack('>i', 360)
+		})
+
+		frame.response.flags = b'\x81\x80'
+		return AUTHORITY(frame, DNS_FIELDS({
 			'domain_name' : dns.pointer(query.record),
 
 			'record_type' : struct.pack('>H', dns.record_type('SOA')),
 			'class' : struct.pack('>H', dns.record_class('IN')),
-			'ttl' : struct.pack('>I', database[query.record][query.type]['ttl']),
-			'length' : struct.pack('>H', len(SOA_specifics)),
+			'ttl' : struct.pack('>I', database[query.record.lower()][query.type]['ttl']),
+			'length' : struct.pack('>H', len(CAA_SPECIFICS)),
 
-			'data' : SOA_specifics
+			'data' : CAA_SPECIFICS
 		}))
 
 	@abc.abstractmethod
@@ -240,7 +282,7 @@ class dns(abc.ABCMeta):
 		# First, wrap single-targets into a list
 		# So that we can handle list objects (if multiple records are allowed)
 		# TODO: Perhaps move this check into earlier stages?
-		mx_servers = database[query.record][query.type]
+		mx_servers = database[query.record.lower()][query.type]
 		if not type(mx_servers) in (list, tuple):
 			mx_servers = [mx_servers]
 
@@ -254,7 +296,7 @@ class dns(abc.ABCMeta):
 			})
 
 			answer_frame.append(ANSWER(frame, DNS_FIELDS({
-				'domain_name' : dns.pointer(query.record),
+				'domain_name' : dns.pointer(query.record.lower()),
 
 				'record_type' : struct.pack('>H', dns.record_type('MX')),
 				'class' : struct.pack('>H', dns.record_class('IN')),
@@ -274,7 +316,7 @@ class dns(abc.ABCMeta):
 		# First, wrap single-targets into a list
 		# So that we can handle list objects (if multiple records are allowed)
 		# TODO: Perhaps move this check into earlier stages?
-		ns_servers = database[query.record][query.type]
+		ns_servers = database[query.record.lower()][query.type]
 		if not type(ns_servers) in (list, tuple):
 			ns_servers = [ns_servers]
 
@@ -283,7 +325,7 @@ class dns(abc.ABCMeta):
 
 		for ns_target in ns_servers:
 			answer_frame.append(ANSWER(frame, {
-				'pointer' : dns.pointer(query.record),
+				'pointer' : dns.pointer(query.record.lower()),
 				'record_type' : struct.pack('>H', dns.record_type('NS')),
 				'class' : struct.pack('>H', dns.record_class('IN')),
 				'ttl' : struct.pack('>I', ns_target['ttl']),
@@ -307,20 +349,20 @@ class dns(abc.ABCMeta):
 		from .data import ANSWER, ADDITIONAL
 		from .utilities import ip_to_bytes
 
-		srv_target = database[query.record][query.type]['target']
+		srv_target = database[query.record.lower()][query.type]['target']
 
 		answer_data = b''.join(OrderedDict({
-			'priority' : struct.pack('>H', database[query.record][query.type]['priority']),
+			'priority' : struct.pack('>H', database[query.record.lower()][query.type]['priority']),
 			'weight' : b'\x00\x00',
-			'port' : struct.pack('>H', database[query.record][query.type]['port']),
+			'port' : struct.pack('>H', database[query.record.lower()][query.type]['port']),
 			'target' : dns.string(bytes(srv_target, 'UTF-8'))
 		}).values())
 		
 		return ANSWER(frame, {
-			'pointer' : dns.pointer(query.record),
+			'pointer' : dns.pointer(query.record.lower()),
 			'record_type' : struct.pack('>H', dns.record_type('SRV')),
 			'class' : struct.pack('>H', dns.record_class('IN')),
-			'ttl' : struct.pack('>I', database[query.record][query.type]['ttl']),
+			'ttl' : struct.pack('>I', database[query.record.lower()][query.type]['ttl']),
 			'length' : struct.pack('>H', len(answer_data)),
 			'data' : answer_data
 		}), ADDITIONAL(frame, {
@@ -337,15 +379,15 @@ class dns(abc.ABCMeta):
 		from .data import ANSWER, DNS_FIELDS
 
 		MX_specifics = DNS_FIELDS({
-			'txt_content' : dns.string(database[query.record][query.type]['target']),
+			'txt_content' : dns.string(database[query.record.lower()][query.type]['target']),
 		})
 
 		return ANSWER(frame, DNS_FIELDS({
-			'domain_name' : dns.pointer(query.record),
+			'domain_name' : dns.pointer(query.record.lower()),
 
 			'record_type' : struct.pack('>H', dns.record_type('TXT')),
 			'class' : struct.pack('>H', dns.record_class('IN')),
-			'ttl' : struct.pack('>I', database[query.record][query.type]['ttl']),
+			'ttl' : struct.pack('>I', database[query.record.lower()][query.type]['ttl']),
 			'length' : struct.pack('>H', len(MX_specifics)),
 
 			'data' : MX_specifics
@@ -356,8 +398,8 @@ class dns(abc.ABCMeta):
 		from .data import ANSWER, DNS_FIELDS
 
 		SOA_specifics = DNS_FIELDS({
-			'primary_server' : dns.pointer(database[query.record][query.type]['target']),
-			'mailbox' : dns.email(f'root@{query.record}'),
+			'primary_server' : dns.pointer(database[query.record.lower()][query.type]['target']),
+			'mailbox' : dns.email(f'root@{query.record.lower()}'),
 			'serial_number' : struct.pack('>i', 2020100801),
 			'refresh_interval' : struct.pack('>i', 360),
 			'retry_interval' : struct.pack('>i', 360),
@@ -366,11 +408,11 @@ class dns(abc.ABCMeta):
 		})
 
 		return ANSWER(frame, DNS_FIELDS({
-			'domain_name' : dns.pointer(query.record),
+			'domain_name' : dns.pointer(query.record.lower()),
 
 			'record_type' : struct.pack('>H', dns.record_type('SOA')),
 			'class' : struct.pack('>H', dns.record_class('IN')),
-			'ttl' : struct.pack('>I', database[query.record][query.type]['ttl']),
+			'ttl' : struct.pack('>I', database[query.record.lower()][query.type]['ttl']),
 			'length' : struct.pack('>H', len(SOA_specifics)),
 
 			'data' : SOA_specifics
@@ -426,8 +468,8 @@ class dns(abc.ABCMeta):
 
 	@abc.abstractmethod
 	def build_answer_to_query(frame, query, database):
-		if not query.record in database: raise KeyError(f"DNS record {query.record} is not in database: {database}")
-		if not query.type in database[query.record]: ValueError(f"DNS record {query.record} is missing the {query.type} type")
+		if not query.record.lower() in database: raise KeyError(f"DNS record {query.record.lower()} is not in database: {database}")
+		if not query.type in database[query.record.lower()]: ValueError(f"DNS record {query.record.lower()} is missing the {query.type} type")
 
 		if hasattr(dns, query.type):
 			return getattr(dns, query.type)(frame, query, database)

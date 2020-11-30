@@ -201,6 +201,14 @@ class ANSWERS(BLOCK):
 	def __repr__(self):
 		return f"<ANSWERS BLOCK({len(self.data)})>"
 
+class AUTHORITY(DNS_FIELD):
+	def __repr__(self):
+		return f"<AUTHORITY BLOCK({len(self.data)})>"
+
+class AUTHORITIES(BLOCK):
+	def __repr__(self):
+		return f"<AUTHORITIES BLOCK({len(self.data)})>"
+
 class ADDITIONALS(BLOCK):
 	def __repr__(self):
 		return f"<ADDITIONALS BLOCK({len(self.data)})>"
@@ -217,11 +225,20 @@ class DNS_RESPONSE():
 	def __init__(self, DNS_FRAME, header_length):
 		self.DNS_FRAME = DNS_FRAME
 		self.header_length = header_length
-		self.flags = b'\x85\x00' # Flags  b'\x81\x80'
+		self._flags = b'\x85\x00'
+		#self._flags = b'\x81\x80'
 		self._queries = QUERIES(self.DNS_FRAME)
 		self._answers = ANSWERS(self.DNS_FRAME, self.queries)
-		self._authorities = set()
-		self._additionals = ADDITIONALS(self.DNS_FRAME, self.answers)
+		self._authorities = AUTHORITIES(self.DNS_FRAME, self.answers)
+		self._additionals = ADDITIONALS(self.DNS_FRAME, self.authorities)
+
+	@property
+	def flags(self):
+		return self._flags
+	
+	@flags.setter
+	def flags(self, value):
+		self._Flags = value
 
 	def __gt__(self, what):
 		return self._answers > what
@@ -251,6 +268,8 @@ class DNS_RESPONSE():
 			self._queries += obj
 		elif type(obj) == ANSWER:
 			self._answers += obj
+		elif type(obj) == AUTHORITY:
+			self._authorities += obj
 		elif type(obj) == ADDITIONAL:
 			self._additionals += obj
 		elif type(obj) == NONE_ANSWER:
@@ -278,7 +297,7 @@ class DNS_RESPONSE():
 
 	@property
 	def assemble(self):
-		return self._queries + self._answers + self._additionals
+		return self._queries + self._answers + self._authorities + self._additionals
 
 class DNS_TCP_FRAME():
 	def __init__(self, CLIENT_IDENTITY):
@@ -326,7 +345,7 @@ class DNS_TCP_FRAME():
 			return
 		
 		self.FRAME_DATA["queries"]["value"] = struct.unpack(">H", self.FRAME_DATA["queries"]["bytes"])[0]
-		self.CLIENT_IDENTITY.server.log(f'[+] Got {self.FRAME_DATA["queries"]["value"]} queries from {self.CLIENT_IDENTITY}')
+		# self.CLIENT_IDENTITY.server.log(f'[+] Got {self.FRAME_DATA["queries"]["value"]} queries from {self.CLIENT_IDENTITY}')
 
 		if self.FRAME_DATA["queries"]["value"] <= 0:
 			yield (Events.CLIENT_NO_QUERIES, None)
@@ -350,17 +369,17 @@ class DNS_TCP_FRAME():
 			return
 
 		for index, query in enumerate(queries.values()):
-			if query.type and query.record in self.CLIENT_IDENTITY.server.database and query.type in self.CLIENT_IDENTITY.server.database[query.record]:
+			if query.type and query.record.lower() in self.CLIENT_IDENTITY.server.database and query.type in self.CLIENT_IDENTITY.server.database[query.record.lower()]:
 				self.response += query # Add the query to the response (as it's the first block ouf of three (query, answer, additionals))
 				self.response += dns.build_answer_to_query(self, query, self.CLIENT_IDENTITY.server.database)
 
-				self.CLIENT_IDENTITY.server.log(f"[ ] Query {index+1}: {query.type}:{query.record} -> {self.CLIENT_IDENTITY.server.database[query.record][query.type]}")
-			elif query.record not in self.CLIENT_IDENTITY.server.database:
-				self.CLIENT_IDENTITY.server.log(f'[-] DNS record {query.record} is not in database: {self.CLIENT_IDENTITY.server.database.keys()}')
-			elif query.type and not query.type in self.CLIENT_IDENTITY.server.database[query.record]:
-				self.CLIENT_IDENTITY.server.log(f"[-] DNS record {query.record} is missing a record for {query.type} requests")
-			else:
-				self.CLIENT_IDENTITY.server.log(f"[-] Record type {query.type} is not implemented (While handling {query.record})")
+				self.CLIENT_IDENTITY.server.log(f"[ ] Query {index+1}: {query.type}:{query.record.lower()} -> {self.CLIENT_IDENTITY.server.database[query.record.lower()][query.type]}")
+			elif query.record.lower() not in self.CLIENT_IDENTITY.server.database:
+				pass # self.CLIENT_IDENTITY.server.log(f'[-] DNS record {query.record.lower()} is not in database: {self.CLIENT_IDENTITY.server.database.keys()}')
+			elif query.type and not query.type in self.CLIENT_IDENTITY.server.database[query.record.lower()]:
+				pass #self.CLIENT_IDENTITY.server.log(f"[-] DNS record {query.record.lower()} is missing a record for {query.type} requests")
+			elif query.type:
+				self.CLIENT_IDENTITY.server.log(f"[-] Record type {query.type} is not implemented (While handling {query.record.lower()})")
 
 		if self.FRAME_DATA['additional_resource_records']:
 			self.response += dns.OPT(self, query, self.CLIENT_IDENTITY.server.database)
@@ -381,7 +400,7 @@ class DNS_TCP_FRAME():
 
 		response = self.finalize_response(response)
 
-		if self.response > 0 or self.response.flags == b'\x81\x05': # TODO: Ugly hack of checking if the flag "Reply code: refused" is set, which causes an empty response and should be sent anyway.
+		if self.response > 0 or self.response.flags in (b'\x81\x05', b'\x81\x80', b'\x85\x00'): # TODO: Ugly hack of checking if the flag "Reply code: refused" is set, which causes an empty response and should be sent anyway.
 			yield (Events.CLIENT_RESPONSE_DATA, response)
 
 class DNS_UDP_FRAME(DNS_TCP_FRAME):

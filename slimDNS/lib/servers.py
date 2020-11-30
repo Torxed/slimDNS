@@ -2,6 +2,7 @@ from socket import *
 
 from .events import *
 from .identities import *
+from .session import storage
 
 try:
 	from select import epoll, EPOLLIN
@@ -49,7 +50,7 @@ class TCP_SERVER():
 		self.config = {**self.default_config(), **kwargs}
 		self.setup_socket()
 		self.main_sock_fileno = self.socket.fileno()
-		
+
 		self.pollobj = epoll()
 		self.pollobj.register(self.main_sock_fileno, EPOLLIN)
 
@@ -66,6 +67,8 @@ class TCP_SERVER():
 		if not record in self.database: self.database[record] = {}
 		self.database[record][record_type] = {'target' : target, 'ttl' : ttl, **kwargs}
 
+		return True
+
 	def remove(self, record, record_type):
 		if not record in self.database: return None
 		if not record_type in self.database[record]: return None
@@ -81,6 +84,7 @@ class TCP_SERVER():
 		if not record_type in self.database[record]: return None
 
 		self.database[record][record_type] = {**self.database[record][record_type], **kwargs}
+		return True
 
 	def log(self, *args, **kwargs):
 		"""
@@ -105,6 +109,9 @@ class TCP_SERVER():
 		self.socket.bind((self.config['addr'], self.config['port']))
 		self.socket.listen(10)
 		print(f"[+] Bound TCP to {self.config['addr']}:{self.config['port']}")
+
+		instance = f"{self.config['addr']}:{self.config['port']}-TCP"
+		storage['instances'][instance] = self
 
 	def default_config(self):
 		"""
@@ -155,6 +162,9 @@ class UDP_SERVER(TCP_SERVER):
 		self.socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
 		self.socket.bind((self.config['addr'], self.config['port']))
 		print(f"[+] Bound to UDP {self.config['addr']}:{self.config['port']}")
+
+		instance = f"{self.config['addr']}:{self.config['port']}-UDP"
+		storage['instances'][instance] = self
 
 	def poll(self, timeout=0.001):#, fileno=None):
 		# d = dict(self.pollobj.poll(timeout))
