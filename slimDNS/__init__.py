@@ -10,3 +10,4 @@ from .lib.abstracts import *
 from .lib.data import *
 from .lib.identities import *
 from .lib.servers import *
+from .lib.session import storage
