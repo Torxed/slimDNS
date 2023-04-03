@@ -14,7 +14,7 @@ import dataclasses
 from ..argparsing import args
 from ..logger import log
 from ..helpers import byte_to_bin, bin_str_to_byte, bytes_to_hex
-from ..types import DNSHeaders
+from ..types import DNSHeaders, DNSRequest, AddressInfo, Layer2, Layer3, Layer4
 
 ETH_P_ALL = 0x0003
 SOL_PACKET = 263
@@ -153,7 +153,7 @@ class PromiscSocket:
 			headers_dict[dns_header_fields[index]] = {list: binary[index], bytes: bin_str_to_byte(binary[index]), str: None, int: attempt_int_conversion(bin_str_to_byte(binary[index]))}
 			headers_dict[dns_header_fields[index]][str] = bytes_to_hex(headers_dict[dns_header_fields[index]][bytes])
 
-		log.info(str(headers_dict))
+		#log.info(str(headers_dict))
 		#log.info(str({field.name: headers_dict.get(field.name,{}).get(field.type) for field in dataclasses.fields(DNSHeaders)}))
 
 		return DNSHeaders(**{field.name: headers_dict.get(field.name,{}).get(field.type) for field in dataclasses.fields(DNSHeaders)})
@@ -174,7 +174,7 @@ class PromiscSocket:
 				ethernet_segments = segments[0:3]
 				mac_dest, mac_source = ethernet_segments[:2]
 				ip_source, ip_dest = segments[4:6]
-				source_port, destination_port, udp_payload_len, udp_checksum = segments[6:10]
+				source_port, dest_port, udp_payload_len, udp_checksum = segments[6:10]
 
 				mac_source = bytes_to_mac(mac_source)
 				mac_dest = bytes_to_mac(mac_dest)
@@ -183,21 +183,40 @@ class PromiscSocket:
 				ip_dest = bytes_to_ip(ip_dest)
 
 
-				if destination_port != args.port:
+				if dest_port != args.port:
 					"""
 					Not a valid DNS frame as it's not on our port
 					"""
 					return None
 				
-				# log.info(f"{self.addr}:{self.port} - Request from {mac_source}->{ip_source}:{source_port} to {mac_dest}->{ip_dest}:{destination_port}")
+				# log.info(f"{self.addr}:{self.port} - Request from {mac_source}->{ip_source}:{source_port} to {mac_dest}->{ip_dest}:{dest_port}")
 				if (self.addr == '' or self.addr == ip_dest):
-					log.info(f"DNS Query from {mac_source}->{ip_source}:{source_port} to {mac_dest}->{ip_dest}:{destination_port}")
+					# log.info(f"DNS Query from {mac_source}->{ip_source}:{source_port} to {mac_dest}->{ip_dest}:{dest_port}")
 
 					if any(data := data[42:42 + udp_payload_len]):
 						dns_headers = self.parse_dns_headers(data[:12])
-						dns_data = data[12:]
+						# dns_data = data[12:]
 
-						log.info(dns_headers)
+						return DNSRequest(
+							headers=dns_headers,
+							raw_data=data[12:],
+							addressing=AddressInfo(
+								layer2=Layer2(
+									source=mac_source,
+									destination=mac_dest
+								),
+								layer3=Layer3(
+									source=ip_source,
+									destination=ip_dest
+								),
+								layer4=Layer4(
+									source=source_port,
+									destination=dest_port
+								)
+							)
+						)
+
+						# log.info(dns_headers)
 
 				break
 

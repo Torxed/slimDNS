@@ -54,6 +54,7 @@ class Orchestrator:
 			workers[identifier]['socket'] = conn
 			workers[identifier]['alive'] = True
 
+			self.pollobj.register(conn.fileno(), select.EPOLLIN|select.EPOLLHUP)
 			self.send(identifier, {"ACTION": "REGISTERED"})
 
 	def spawn(self, identifier):
@@ -87,6 +88,7 @@ class Orchestrator:
 			exit(0)
 
 	def run(self):
+		transactions = {}
 		while True:
 			for fd, event in self.pollobj.poll(0.25):
 				if fd == self.thread_listener.fileno():
@@ -98,3 +100,29 @@ class Orchestrator:
 						# conn.send(b'{"ACTION": "CLOSE"}')
 					else:
 						conn.close()
+				else:
+					for worker_id in list(workers.keys()):
+						if workers[worker_id]['socket'].fileno() == fd:
+							data = workers[worker_id]['socket'].recv(8192).decode('UTF-8')
+
+							if not data:
+								workers[worker_id]['alive'] = False
+								self.pollobj.unregister(workers[worker_id]['socket'].fileno())
+								workers[worker_id]['socket'].close()
+								del(workers[worker_id])
+								continue
+
+							# print(f"slimDNS-{worker_id} sent: {data}")
+
+							message = json.loads(data)
+
+							if message.get('ACTION') == 'PROCESSING-REQUEST':
+								if (identifier := message.get('TRANSACTION', {}).get('identifier')) not in transactions:
+									transactions[identifier] = message.get('TRANSACTION', {}).get('source')
+									self.send(worker_id, {"ACTION": "PROCEED", "TRANSACTION": message.get('TRANSACTION')})
+								elif transactions[identifier] != message.get('TRANSACTION', {}).get('source'):
+									transactions[identifier] = message.get('TRANSACTION', {}).get('source')
+									self.send(worker_id, {"ACTION": "PROCEED", "TRANSACTION": message.get('TRANSACTION')})
+								else:
+									self.send(worker_id, {"ACTION": "DROP", "TRANSACTION": message.get('TRANSACTION')})
+							break
