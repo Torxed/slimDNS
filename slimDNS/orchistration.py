@@ -3,8 +3,14 @@ import select
 import pty
 import os
 import json
+import logging
+import traceback
+
+from systemd.journal import JournalHandler
+
 from .argparsing import args
 from .session import pollobj, workers
+from .logger import log
 
 class Orchestrator:
 	_MAIN_PID = os.getpid()
@@ -27,7 +33,8 @@ class Orchestrator:
 			message = message.encode('UTF-8')
 
 		for identifier in workers:
-			workers[identifier]['socket'].send(message)
+			if workers[identifier]['socket']:
+				workers[identifier]['socket'].send(message)
 
 	def send(self, identifier, message):
 		if type(message) == dict:
@@ -35,7 +42,11 @@ class Orchestrator:
 		if type(message) == str:
 			message = message.encode('UTF-8')
 
-		workers[identifier]['socket'].send(message)
+		if workers[identifier]['socket']:
+			try:
+				workers[identifier]['socket'].send(message)
+			except BrokenPipeError:
+				pass
 
 	def register(self, conn, addr, reg_data):
 		if (started := reg_data.get('started')) and (identifier := reg_data.get('identifier')):
@@ -52,17 +63,22 @@ class Orchestrator:
 			_PARENT = True
 			return child_fd
 		else:
+			log.handlers.remove(log.handlers[0])
+			log.addHandler(JournalHandler(SYSLOG_IDENTIFIER=f"slimDNS-{identifier}"))
+
 			try:
 				from .workers import Worker
 				Worker(parent=self._MAIN_PID, identifier=identifier).run()
 			except Exception as error:
-				traceback_message = traceback.format_exc()
+				trace = traceback.format_exc()
+
+				log.error(trace)
 
 				# If we didn't get a traceback_message that means the parent
 				# process terminated and the client wanted to keep running
-				if len(traceback_message):
+				if len(trace):
 					with open(f'./crash_{identifier}.log', 'w') as fh:
-						fh.write(traceback_message)
+						fh.write(trace)
 				else:
 					exit(0)
 

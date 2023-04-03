@@ -1,6 +1,5 @@
 import slimDNS
 
-_PARENT = False
 orchistration = slimDNS.Orchestrator()
 
 while len(slimDNS.workers) <= slimDNS.args.workers:

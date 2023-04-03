@@ -2,8 +2,13 @@ import socket
 import json
 import time
 import select
+
+#from systemd.journal import JournalHandler
+
 from ..argparsing import args
 from ..helpers import pid_exists
+from ..logger import log
+from .sockets import PromiscSocket
 
 class Worker:
 	def __init__(self, parent, identifier):
@@ -11,7 +16,10 @@ class Worker:
 		self.identifier = identifier
 		self._log = open(f'./worker_{self.identifier}.log', 'a')
 
-		self.log(f'Initializing worker {self.identifier}')
+		#log.handlers.remove(log.handlers[0])
+		#log.addHandler(JournalHandler(SYSLOG_IDENTIFIER=f"slimDNS-{self.identifier}"))
+
+		self.log(f'Worker is being initialized.')
 
 		self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 		self.socket.connect(str(args.thread_socket))
@@ -24,26 +32,38 @@ class Worker:
 		self.pollobj = select.epoll()
 		self.pollobj.register(self.socket.fileno(), select.EPOLLIN|select.EPOLLHUP)
 
+		self.dns_socket = PromiscSocket(addr=args.address, port=args.port, buffer_size=args.framesize)
 		self.is_alive = True
 
 	def log(self, *message):
+		# Log to systemd
+		log.info(''.join(message))
+
+		# Log to file
 		self._log.write(''.join(message) + '\n')
 		self._log.flush()
 
 	def run(self):
-		self.log(f'Worker waiting for messages {self.identifier}')
+		self.log(f'Worker is waiting for DNS messages.')
 
-		while self.is_alive and pid_exists(self.parent):
-			for fd, event in self.pollobj.poll(1):
-				data = self.socket.recv(8192).decode('UTF-8')
-				if len(data) == 0:
-					self.close(reason="NO_DATA_RECV")
+		with self.dns_socket as activated_socket:
+			while self.is_alive and pid_exists(self.parent):
+				for fd, event in self.pollobj.poll(0.025):
+					data = self.socket.recv(8192).decode('UTF-8')
 
-				data = json.loads(data)
-				self.log(f"Got data: {data}")
+					if len(data) == 0:
+						self.close(reason="NO_DATA_RECV")
 
-				if data.get('ACTION') == 'CLOSE' and data.get('IDENTIFIER') == self.identifier:
-					self.close(reason='PARENT_CLOSE_INSTRUCTION', notify=False)
+					data = json.loads(data)
+					self.log(f"Got data: {data}")
+
+					if data.get('ACTION') == 'CLOSE' and data.get('IDENTIFIER') == self.identifier:
+						self.close(reason='PARENT_CLOSE_INSTRUCTION', notify=False)
+
+				if data := activated_socket.recv():
+					print(data)
+
+		exit(0)
 
 	def send(self, message, encoding='UTF-8'):
 		if type(message) == str:
@@ -71,5 +91,3 @@ class Worker:
 
 		self.is_alive = False
 		self._log.close()
-
-		exit(0)
