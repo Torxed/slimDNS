@@ -90,7 +90,7 @@ class Orchestrator:
 	def run(self):
 		transactions = {}
 		while True:
-			for fd, event in self.pollobj.poll(0.25):
+			for fd, event in self.pollobj.poll(0.025):
 				if fd == self.thread_listener.fileno():
 					conn, addr = self.thread_listener.accept()
 					r, w, x = select.select([conn], [], [])
@@ -125,7 +125,7 @@ class Orchestrator:
 									self.send(worker_id, {"ACTION": "PROCEED", "TRANSACTION": message.get('TRANSACTION')})
 								else:
 									self.send(worker_id, {"ACTION": "DROP", "TRANSACTION": message.get('TRANSACTION')})
-							elif message.get('ACTION') == 'PROCESSED':
-								if (identifier := message.get('TRANSACTION', {}).get('identifier')) in transactions:
-									del(transactions[identifier])
+							# elif message.get('ACTION') == 'PROCESSED':
+							# 	if (identifier := message.get('TRANSACTION', {}).get('identifier')) in transactions:
+							# 		del(transactions[identifier])
 							break
