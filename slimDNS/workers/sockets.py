@@ -171,7 +171,7 @@ class PromiscUDPSocket:
 
 	def recv(self):
 		if self.socket:
-			for fd, event in self.poller.poll(0.025):
+			for fd, event in self.poller.poll(0.001):
 				data, auxillary_data_raw, flags, addr = self.socket.recvmsg(self.buffer_size, socket.CMSG_LEN(self.buffer_size))
 
 				if len(data) < 42:

@@ -87,7 +87,7 @@ class Worker:
 
 		with self.dns_socket as activated_socket:
 			while self.is_alive and pid_exists(self.parent):
-				for fd, event in self.pollobj.poll(0.025):
+				for fd, event in self.pollobj.poll(0.001):
 					data = self.socket.recv(8192).decode('UTF-8')
 
 					if len(data) == 0:

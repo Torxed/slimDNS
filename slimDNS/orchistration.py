@@ -90,7 +90,7 @@ class Orchestrator:
 	def run(self):
 		transactions = {}
 		while True:
-			for fd, event in self.pollobj.poll(0.025):
+			for fd, event in self.pollobj.poll(0.001):
 				if fd == self.thread_listener.fileno():
 					conn, addr = self.thread_listener.accept()
 					r, w, x = select.select([conn], [], [])
