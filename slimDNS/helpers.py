@@ -8,6 +8,8 @@ import base64
 from json import JSONEncoder, dumps, loads
 from datetime import date, datetime
 
+_DNS_HEADER_STRUCT = [2, 2, 2, 2, 2, 2]
+
 class JSON_Encoder:
 	def _encode(obj):
 		if isinstance(obj, dict):

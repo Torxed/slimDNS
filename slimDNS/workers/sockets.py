@@ -13,7 +13,7 @@ import dataclasses
 
 from ..argparsing import args
 from ..logger import log
-from ..helpers import byte_to_bin, bin_str_to_byte, bytes_to_hex
+from ..helpers import _DNS_HEADER_STRUCT, byte_to_bin, bin_str_to_byte, bytes_to_hex
 from ..types import DNSHeaders, DNSRequest, AddressInfo, Layer2, Layer3, Layer4
 
 ETH_P_ALL = 0x0003
@@ -97,7 +97,7 @@ def attempt_int_conversion(bytes):
 		return int(bytes)
 	except ValueError:
 		try:
-			return struct.unpack('H', bytes)[0]
+			return struct.unpack('>H', bytes)[0]
 		except:
 			pass
 
@@ -136,7 +136,6 @@ class PromiscSocket:
 			traceback.print_tb(args[2])
 
 	def parse_dns_headers(self, data):
-		dns_header_struct = [2, 2, 2, 2, 2, 2]
 		dns_header_fields = [
 			'transaction_id',
 			'flags',
@@ -148,10 +147,22 @@ class PromiscSocket:
 
 		headers_dict = {}
 
-		binary = list(byte_to_bin(data[0:12], bin_map=dns_header_struct))
+		binary = list(byte_to_bin(data[0:12], bin_map=_DNS_HEADER_STRUCT))
 		for index in range(len(binary)):
 			headers_dict[dns_header_fields[index]] = {list: binary[index], bytes: bin_str_to_byte(binary[index]), str: None, int: attempt_int_conversion(bin_str_to_byte(binary[index]))}
 			headers_dict[dns_header_fields[index]][str] = bytes_to_hex(headers_dict[dns_header_fields[index]][bytes])
+
+		## Parse the frame header
+		headers_dict['flags'][dict] = {
+			'QR' : int(headers_dict['flags'][list][0][0]),
+			'opcode' : int(headers_dict['flags'][list][0][1:5]),
+			'authorative_answer' : int(headers_dict['flags'][list][0][5]),
+			'truncation' : int(headers_dict['flags'][list][0][6]),
+			'recursion_desired' : int(headers_dict['flags'][list][0][7]),
+			#?'recursion_available' : int(headers_dict['flags'][list][1][0]),
+			#?'zero_field' : int(headers_dict['flags'][list][1][1]),
+			#?'response_code' : int(headers_dict['flags'][list][1][4:8])
+		}
 
 		#log.info(str(headers_dict))
 		#log.info(str({field.name: headers_dict.get(field.name,{}).get(field.type) for field in dataclasses.fields(DNSHeaders)}))
@@ -189,7 +200,8 @@ class PromiscSocket:
 					"""
 					return None
 				
-				# log.info(f"{self.addr}:{self.port} - Request from {mac_source}->{ip_source}:{source_port} to {mac_dest}->{ip_dest}:{dest_port}")
+				# log.info(f"{[self.addr]}:{self.port} - Request from {mac_source}->{[ip_source]}:{source_port} to {mac_dest}->{ip_dest}:{dest_port}")
+
 				if (self.addr == '' or self.addr == ip_dest):
 					# log.info(f"DNS Query from {mac_source}->{ip_source}:{source_port} to {mac_dest}->{ip_dest}:{dest_port}")
 
@@ -220,20 +232,16 @@ class PromiscSocket:
 
 				break
 
-	def send(stream, addressing, on_send=None, resend_buffer=2, chunk_length=None, rate_limit=None):
+	def send(self, addressing, payload):
 		if self.socket:
-			if chunk_length is None:
-				# Ethernet/IP/UDP headers are 42 byte (estimation)
-				chunk_length = args.framesize -55
-
 			aux_data = [(263, 8, b'\x01\x00\x00\x00<\x00\x00\x00<\x00\x00\x00\x00\x00\x0e\x00\x00\x00\x00\x00')]
 			flags = 0
 
 			frame_index = 0
 			previous_data = None
 
-			mac_destination = b''.join([struct.pack('B', int(mac_part, 16)) for mac_part in str(addressing['destination']['mac_address']).split(':')])
-			mac_source = b''.join([struct.pack('B', int(mac_part, 16)) for mac_part in str(addressing['source']['mac_address']).split(':')])
+			mac_destination = b''.join([struct.pack('B', int(mac_part, 16)) for mac_part in str(addressing.layer2.destination).split(':')])
+			mac_source = b''.join([struct.pack('B', int(mac_part, 16)) for mac_part in str(addressing.layer2.source).split(':')])
 			mac_frame_type = struct.pack('H', 8)
 
 			mac_header = mac_destination + mac_source + mac_frame_type
@@ -249,16 +257,15 @@ class PromiscSocket:
 			protocol = struct.pack('B', 17)
 			checksum = struct.pack('>H', 0)
 
-			ip_source = b''.join([struct.pack('B', int(addr_part)) for addr_part in str(addressing['source']['ipv4_address']).split('.')])
-			ip_destination = b''.join([struct.pack('B', int(addr_part)) for addr_part in str(addressing['destination']['ipv4_address']).split('.')])
+			ip_source = b''.join([struct.pack('B', int(addr_part)) for addr_part in str(addressing.layer3.source).split('.')])
+			ip_destination = b''.join([struct.pack('B', int(addr_part)) for addr_part in str(addressing.layer3.destination).split('.')])
 
-			udp_source = struct.pack('>H', random.randint(32768, 60999))
-			udp_destination = struct.pack('>H', addressing['udp_port'])
+			udp_source = struct.pack('>H', addressing.layer4.source)
+			udp_destination = struct.pack('>H', addressing.layer4.destination)
 			udp_checksum = struct.pack('>H', 0)
 
-			log(f"Telling reciever to set up {repr(stream)}, resending this {resend_buffer} time(s)", fg="gray", level=logging.INFO)
-			stream_information_payload = stream.pre_flight_info
-			udp_length = len(stream_information_payload)
+			# log(f"Telling reciever to set up {repr(stream)}, resending this {resend_buffer} time(s)", fg="gray", level=logging.INFO)
+			udp_length = len(payload)
 
 			ethernet = mac_header
 			ipv4 = version_and_header_length
@@ -275,7 +282,7 @@ class PromiscSocket:
 			udp += udp_destination
 			udp += struct.pack('>H', udp_length)
 			udp += udp_checksum
-			udp += stream_information_payload
+			udp += payload
 
 			full_frame = ethernet + ipv4 + udp
-			self.socket.sendmsg([full_frame], aux_data, flags, (args.interface.name, addressing['udp_port']))
+			self.socket.sendmsg([full_frame], aux_data, flags, (args.interface.name, addressing.layer4.destination))

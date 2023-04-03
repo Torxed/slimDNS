@@ -3,12 +3,24 @@ import json
 import time
 import select
 import base64
+import struct
 
 #from systemd.journal import JournalHandler
 
 from ..argparsing import args
-from ..helpers import pid_exists, JSON_Typer
+from ..helpers import _DNS_HEADER_STRUCT, pid_exists, JSON_Typer
 from ..logger import log
+from ..types import (
+	DNSResponse,
+	DNSQueries,
+	DNSAnswers,
+	DNSAuthorities,
+	DNSAdditionals,
+	AddressInfo,
+	Layer2,
+	Layer3,
+	Layer4
+)
 from .sockets import PromiscSocket
 
 class Worker:
@@ -46,9 +58,29 @@ class Worker:
 		self._log.write(''.join(message) + '\n')
 		self._log.flush()
 
-	def process(self, transaction):
-		log.info(f"Processing transaction: {transaction} - {self.transactions.get(transaction)}")
+	def process(self, transaction_id):
+		log.info(f"Processing transaction: {transaction_id} - {self.transactions.get(transaction_id)}")
+		dns_request = self.transactions.get(transaction_id)
 
+		self.header_length = sum(_DNS_HEADER_STRUCT)-2 # Offsets are counted from the Transaction ID, and does not include the 2 bytes of "Length"
+
+		queries = DNSQueries.from_request(dns_request)
+		answers = DNSAnswers.from_queries(queries)
+		authorities = DNSAuthorities()
+		additionals = DNSAdditionals(request=dns_request)
+
+		return DNSResponse(
+			transaction_id=base64.b64decode(transaction_id),
+			flags=b'\x85\x00', # Make this into individual flags instead
+			queries=struct.pack('>H', len(queries)),
+			answers=struct.pack('>H', len(answers)),
+			authorities=struct.pack('>H', len(authorities)),
+			additionals=struct.pack('>H', len(additionals)),
+			data = queries + answers + authorities + additionals
+		)
+
+		# log.info(str(response))
+		# log.info(str(response.bytes))
 
 	def run(self):
 		self.log(f'Worker is waiting for DNS messages.')
@@ -67,7 +99,25 @@ class Worker:
 					if data.get('ACTION') == 'CLOSE' and data.get('IDENTIFIER') == self.identifier:
 						self.close(reason='PARENT_CLOSE_INSTRUCTION', notify=False)
 					elif (identifier := data.get('TRANSACTION', {}).get('identifier')) and data.get('ACTION') == 'PROCEED':
-						self.process(identifier)
+						if response := self.process(identifier):
+							log.info(str(response))
+							activated_socket.send(
+								addressing=AddressInfo(
+									layer2=Layer2(
+										source=dns_request.addressing.layer2.destination,
+										destination=dns_request.addressing.layer2.source
+									),
+									layer3=Layer3(
+										source=dns_request.addressing.layer3.destination,
+										destination=dns_request.addressing.layer3.source
+									),
+									layer4=Layer4(
+										source=dns_request.addressing.layer4.destination,
+										destination=dns_request.addressing.layer4.source
+									)
+								),
+								payload=response.bytes
+							)
 					elif data.get('ACTION') == 'DROP' and identifier:
 						del(self.transactions[identifier])
 
@@ -86,7 +136,6 @@ class Worker:
 
 	def send(self, message, encoding='UTF-8'):
 		if type(message) == dict:
-			log.info(str(message))
 			message = json.dumps(message, cls=JSON_Typer)
 		if type(message) == str:
 			message = message.encode(encoding)

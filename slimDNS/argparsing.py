@@ -1,5 +1,6 @@
 import argparse
 import pathlib
+import ipaddress
 from .types import Interface
 
 # Parse script arguments and use defaults from configuration where needed
@@ -41,7 +42,7 @@ main_options.add_argument(
 )
 main_options.add_argument(
 	"--address",
-	type=str,
+	type=ipaddress.ip_address,
 	default='',
 	nargs="?",
 	help="Dictates which address we should monitor for DNS requests on (default all IPs)"
