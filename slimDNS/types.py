@@ -1,6 +1,7 @@
 import dataclasses
 import struct
 from .logger import log
+from .exceptions import IncompleteFrame
 from .dns import IDNA, human_query_type, record_type, string
 
 class Interface(object):

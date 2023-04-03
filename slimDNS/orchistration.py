@@ -125,4 +125,7 @@ class Orchestrator:
 									self.send(worker_id, {"ACTION": "PROCEED", "TRANSACTION": message.get('TRANSACTION')})
 								else:
 									self.send(worker_id, {"ACTION": "DROP", "TRANSACTION": message.get('TRANSACTION')})
+							elif message.get('ACTION') == 'PROCESSED':
+								if (identifier := message.get('TRANSACTION', {}).get('identifier')) in transactions:
+									del(transactions[identifier])
 							break

@@ -103,7 +103,7 @@ def attempt_int_conversion(bytes):
 
 	return None
 
-class PromiscSocket:
+class PromiscUDPSocket:
 	def __init__(self, addr, port, buffer_size=None):
 		if buffer_size is None:
 			buffer_size = args.framesize
@@ -270,7 +270,7 @@ class PromiscSocket:
 			ethernet = mac_header
 			ipv4 = version_and_header_length
 			ipv4 += DSC_ECN
-			ipv4 += struct.pack('>H', 20 + 8 + udp_length) # 20 = IP Length, 8 = UDP length, len(stream_information_payload) = data
+			ipv4 += struct.pack('>H', 20 + 8 + udp_length) # 20 = IP Length, 8 = UDP length, len(payload) = data
 			ipv4 += identification
 			ipv4 += fragmentation
 			ipv4 += ttl
@@ -280,9 +280,10 @@ class PromiscSocket:
 			ipv4 += ip_destination
 			udp = udp_source
 			udp += udp_destination
-			udp += struct.pack('>H', udp_length)
+			udp += struct.pack('>H', udp_length + 8)
 			udp += udp_checksum
 			udp += payload
 
 			full_frame = ethernet + ipv4 + udp
 			self.socket.sendmsg([full_frame], aux_data, flags, (args.interface.name, addressing.layer4.destination))
+			return True

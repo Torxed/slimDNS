@@ -21,7 +21,7 @@ from ..types import (
 	Layer3,
 	Layer4
 )
-from .sockets import PromiscSocket
+from .sockets import PromiscUDPSocket
 
 class Worker:
 	def __init__(self, parent, identifier):
@@ -47,7 +47,7 @@ class Worker:
 		self.pollobj = select.epoll()
 		self.pollobj.register(self.socket.fileno(), select.EPOLLIN|select.EPOLLHUP)
 
-		self.dns_socket = PromiscSocket(addr=args.address, port=args.port, buffer_size=args.framesize)
+		self.dns_socket = PromiscUDPSocket(addr=args.address, port=args.port, buffer_size=args.framesize)
 		self.is_alive = True
 
 	def log(self, *message):
@@ -94,14 +94,14 @@ class Worker:
 						self.close(reason="NO_DATA_RECV")
 
 					data = json.loads(data)
-					# self.log(f"Parent told me: {data}")
+					self.log(f"Parent told me: {data}")
 
 					if data.get('ACTION') == 'CLOSE' and data.get('IDENTIFIER') == self.identifier:
 						self.close(reason='PARENT_CLOSE_INSTRUCTION', notify=False)
 					elif (identifier := data.get('TRANSACTION', {}).get('identifier')) and data.get('ACTION') == 'PROCEED':
 						if response := self.process(identifier):
-							log.info(str(response))
-							activated_socket.send(
+							log.info(f"Response to transaction {identifier}: {response}")
+							if activated_socket.send(
 								addressing=AddressInfo(
 									layer2=Layer2(
 										source=dns_request.addressing.layer2.destination,
@@ -117,7 +117,22 @@ class Worker:
 									)
 								),
 								payload=response.bytes
-							)
+							):
+								log.info(f"Telling parent:", json.dumps({
+									"ACTION": "PROCESSED",
+									"TRANSACTION": {
+										"identifier": dns_request.headers.transaction_id,
+										"source": dns_request.addressing.layer3.source
+									}
+								}, cls=JSON_Typer))
+								self.send({
+									"ACTION": "PROCESSED",
+									"TRANSACTION": {
+										"identifier": dns_request.headers.transaction_id,
+										"source": dns_request.addressing.layer3.source
+									}
+								})
+								del(self.transactions[identifier])
 					elif data.get('ACTION') == 'DROP' and identifier:
 						del(self.transactions[identifier])
 
