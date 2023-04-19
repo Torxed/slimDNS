@@ -104,7 +104,7 @@ def attempt_int_conversion(bytes):
 	return None
 
 class PromiscUDPSocket:
-	def __init__(self, addr, port, buffer_size=None):
+	def __init__(self, addr, port, buffer_size=None, worker=None):
 		if buffer_size is None:
 			buffer_size = args.framesize
 
@@ -112,6 +112,7 @@ class PromiscUDPSocket:
 		self.port = port
 		self.socket = None
 		self.buffer_size = buffer_size
+		self.worker = worker
 
 		self.transfers = {
 
@@ -121,7 +122,7 @@ class PromiscUDPSocket:
 		self.socket = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(ETH_P_ALL))
 		self.socket.setsockopt(SOL_PACKET, PACKET_AUXDATA, 1)
 		
-		self.promisciousMode = promisc(self.socket, bytes(args.interface.name, 'UTF-8'))
+		self.promisciousMode = promisc(self.socket, bytes(args.interface, 'UTF-8'))
 		self.promisciousMode.on()
 
 		self.poller = select.epoll()
@@ -193,6 +194,12 @@ class PromiscUDPSocket:
 				ip_source = bytes_to_ip(ip_source)
 				ip_dest = bytes_to_ip(ip_dest)
 
+				if self.worker:
+					self.worker.log(f"Got data: {ip_dest}:{dest_port}")
+
+					self.worker.log(f"Ports: {dest_port} vs {args.port}")
+
+					self.worker.log(str(ip_dest == '255.255.255.255' or self.addr == '' or self.addr == ip_dest))
 
 				if dest_port != args.port:
 					"""
@@ -202,7 +209,7 @@ class PromiscUDPSocket:
 				
 				# log.info(f"{[self.addr]}:{self.port} - Request from {mac_source}->{[ip_source]}:{source_port} to {mac_dest}->{ip_dest}:{dest_port}")
 
-				if (self.addr == '' or self.addr == ip_dest):
+				if (ip_dest == '255.255.255.255' or self.addr == '' or self.addr == ip_dest):
 					# log.info(f"DNS Query from {mac_source}->{ip_source}:{source_port} to {mac_dest}->{ip_dest}:{dest_port}")
 
 					if any(data := data[42:42 + udp_payload_len]):
@@ -285,5 +292,5 @@ class PromiscUDPSocket:
 			udp += payload
 
 			full_frame = ethernet + ipv4 + udp
-			self.socket.sendmsg([full_frame], aux_data, flags, (args.interface.name, addressing.layer4.destination))
+			self.socket.sendmsg([full_frame], aux_data, flags, (args.interface, addressing.layer4.destination))
 			return True

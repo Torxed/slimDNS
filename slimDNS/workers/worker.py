@@ -47,7 +47,7 @@ class Worker:
 		self.pollobj = select.epoll()
 		self.pollobj.register(self.socket.fileno(), select.EPOLLIN|select.EPOLLHUP)
 
-		self.dns_socket = PromiscUDPSocket(addr=args.address, port=args.port, buffer_size=args.framesize)
+		self.dns_socket = PromiscUDPSocket(addr=args.address, port=args.port, buffer_size=args.framesize, worker=self)
 		self.is_alive = True
 
 	def log(self, *message):
@@ -98,6 +98,7 @@ class Worker:
 
 					if data.get('ACTION') == 'CLOSE' and data.get('IDENTIFIER') == self.identifier:
 						self.close(reason='PARENT_CLOSE_INSTRUCTION', notify=False)
+					
 					elif (identifier := data.get('TRANSACTION', {}).get('identifier')) and data.get('ACTION') == 'PROCEED':
 						if response := self.process(identifier):
 							log.info(f"Response to transaction {identifier}: {response}")
