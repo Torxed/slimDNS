@@ -194,13 +194,6 @@ class PromiscUDPSocket:
 				ip_source = bytes_to_ip(ip_source)
 				ip_dest = bytes_to_ip(ip_dest)
 
-				if self.worker:
-					self.worker.log(f"Got data: {ip_dest}:{dest_port}")
-
-					self.worker.log(f"Ports: {dest_port} vs {args.port}")
-
-					self.worker.log(str(ip_dest == '255.255.255.255' or self.addr == '' or self.addr == ip_dest))
-
 				if dest_port != args.port:
 					"""
 					Not a valid DNS frame as it's not on our port

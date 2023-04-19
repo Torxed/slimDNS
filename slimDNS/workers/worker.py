@@ -64,10 +64,15 @@ class Worker:
 
 		self.header_length = sum(_DNS_HEADER_STRUCT)-2 # Offsets are counted from the Transaction ID, and does not include the 2 bytes of "Length"
 
-		queries = DNSQueries.from_request(dns_request)
-		answers = DNSAnswers.from_queries(queries)
+		queries = DNSQueries.from_request(dns_request, worker=self)
+		answers = DNSAnswers.from_queries(queries, worker=self)
 		authorities = DNSAuthorities()
-		additionals = DNSAdditionals(request=dns_request)
+		additionals = DNSAdditionals.from_request(dns_request, worker=self)
+
+		self.log(f"Queries: {queries}")
+		self.log(f"Answers: {answers}")
+		self.log(f"Authorities: {authorities}")
+		self.log(f"additionals: {additionals}")
 
 		return DNSResponse(
 			transaction_id=base64.b64decode(transaction_id),
@@ -126,6 +131,7 @@ class Worker:
 										"source": dns_request.addressing.layer3.source
 									}
 								}, cls=JSON_Typer))
+
 								self.send({
 									"ACTION": "PROCESSED",
 									"TRANSACTION": {
